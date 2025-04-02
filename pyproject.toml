@@ -1,0 +1,20 @@
+[project]
+name = ""
+version = ""
+description = ""
+authors = [
+    {name = "", email = ""},
+]
+dependencies = [
+    "pandas>=2.0.3",
+    "openpyxl>=3.1.2",
+    "seaborn>=0.13.0",
+    "matplotlib>=3.9.4",
+    "ace-tools>=0.0",
+    "spacy>=3.8.4",
+    "pip>=25.0",
+]
+requires-python = "<3.13,>=3.10"
+readme = "README.md"
+license = {text = "MIT"}
+
