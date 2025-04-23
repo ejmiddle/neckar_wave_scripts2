@@ -1,9 +1,9 @@
 import pandas as pd
 
 # Load the Excel file
-df = pd.read_excel('Trinkgeld_Tabellen/Trinkgelder_Verteilung_Februar.xlsx', sheet_name='Tabelle1')
+df = pd.read_excel('Trinkgeld_Tabellen/Trinkgelder_Verteilung_März.xlsx', sheet_name='Tabelle1')
 
-df = df[df['Karte'] != 'XXX']
+df = df[(df['Karte'] != 'XXX') & (df['Karte'].notna()) & (df['Karte'] != '')]
 print(df)
 # Define the person columns
 person_columns = ['Person1', 'Person2', 'Person3', 'Person4', 'Person5']
@@ -18,6 +18,7 @@ for _, row in df.iterrows():
     
     # Get the list of people who worked (non-NaN values in person columns)
     persons = row[person_columns].dropna().values
+    # print(persons)
     # Remove all blank spaces from each element
     persons = [str(person).replace(" ", "") for person in persons]
     

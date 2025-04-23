@@ -36,7 +36,7 @@ def eval_location(date_range, location):
     })
 
     # --- Save all evaluations to Excel ---
-    output_file = f"{main_folder}/umsatz_eval_{location}.xlsx"
+    output_file = f"{main_folder}/umsatz_eval_{location}_{date_range}.xlsx"
     with pd.ExcelWriter(output_file, engine="xlsxwriter") as writer:
         evaluation_df.to_excel(writer, sheet_name="umsatz_mwst", index=False)
         payments_summary.to_excel(writer, sheet_name="zahlungsart", index=False)
@@ -60,12 +60,15 @@ def eval_gutscheine_location(date_range, location):
     product_summary = df_filtered.groupby("Produkt")["Umsatz inkl. Steuer"].sum().reset_index()
 
     # Save to separate Excel file
-    product_output_file = f"{main_folder}/gutschein_eval_{location}.xlsx"
+    product_output_file = f"{main_folder}/gutschein_eval_{location}_{date_range}.xlsx"
     product_summary.to_excel(product_output_file, sheet_name="gutscheine", index=False)
 
 
 # Define variables
-date_range = "2025-03-01_2025-03-31"
+# date_range = "2025-03-01_2025-03-31"
+# date_range = "2025-01-01_2025-03-31" # Q1
+# date_range = "2025-01-01_2025-01-31"
+date_range = "2025-02-01_2025-02-28"
 
 location = "WIE"
 eval_location(date_range, location)
