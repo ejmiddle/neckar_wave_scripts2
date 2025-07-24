@@ -1,6 +1,6 @@
 import requests
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 import os 
 from dotenv import load_dotenv
 
@@ -12,6 +12,7 @@ ACCESS_TOKEN = os.getenv("SHOPIFY_KEY")
 SHOP_NAME = "suedseitecoffee"  # e.g., 'my-store'
 # Shopify API version
 API_VERSION = "2024-01"
+print(ACCESS_TOKEN)
 
 # Endpoint URL
 url = f"https://{SHOP_NAME}.myshopify.com/admin/api/{API_VERSION}/orders.json"
@@ -42,7 +43,7 @@ def get_last_6_days_orders():
     url = f"https://{SHOP_NAME}.myshopify.com/admin/api/{API_VERSION}/orders.json"
     
     # Date 6 days ago
-    six_days_ago = (datetime.utcnow() - timedelta(days=6)).isoformat()
+    six_days_ago = (datetime.now(UTC) - timedelta(days=6)).isoformat()
 
     params = {
         "status": "any",
@@ -119,6 +120,14 @@ def get_last_6_days_orders_with_variants():
             })
 
     return pd.DataFrame(data)
+
+
+if check_password():
+
+    frontend_config = st.session_state.frontend_config
+    agent_config = st.session_state.agent_config
+    page_configuration(frontend_config, "Extract Info From Document")
+    show_pages_based_on_user_type(frontend_config)
 
 # Example usage
 df = get_last_6_days_orders_with_variants()
