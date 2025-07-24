@@ -68,7 +68,9 @@ def eval_gutscheine_location(date_range, location):
 # date_range = "2025-03-01_2025-03-31"
 # date_range = "2025-01-01_2025-03-31" # Q1
 # date_range = "2025-01-01_2025-01-31"
-date_range = "2025-02-01_2025-02-28"
+# date_range = "2025-02-01_2025-02-28"
+# date_range = "2025-04-01_2025-04-30"
+date_range = "2025-05-01_2025-05-31"
 
 location = "WIE"
 eval_location(date_range, location)
