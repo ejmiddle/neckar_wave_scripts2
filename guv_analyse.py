@@ -3,8 +3,6 @@ import numpy as np
 from datetime import datetime
 import os
 import matplotlib.pyplot as plt
-import matplotlib.patches as patches
-from matplotlib.ticker import FuncFormatter
 import seaborn as sns
 
 def read_guv_data(file_path):

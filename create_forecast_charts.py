@@ -3,8 +3,6 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 from matplotlib.ticker import FuncFormatter
-import matplotlib.dates as mdates
-from datetime import datetime, timedelta
 import os
 import csv
 
@@ -22,6 +20,7 @@ def percent_formatter(x, pos):
 
 def create_forecast_charts():
     # Create output directory
+    input_dir = 'guv/inputs/'
     output_dir = 'guv/outputs/prognose'
     os.makedirs(output_dir, exist_ok=True)
     
@@ -29,7 +28,7 @@ def create_forecast_charts():
     data = {}
     quarters = []
     
-    with open('prognose_input.csv', 'r', encoding='utf-8') as file:
+    with open(input_dir + 'prognose_input.csv', 'r', encoding='utf-8') as file:
         csv_reader = csv.reader(file, delimiter=';')
         rows = list(csv_reader)
     
