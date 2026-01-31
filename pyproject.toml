@@ -1,9 +1,9 @@
 [project]
-name = ""
-version = ""
-description = ""
+name = "neckarwave-scripts"
+version = "0.1.0"
+description = "Business analysis and management scripts for Neckar Wave"
 authors = [
-    {name = "", email = ""},
+    {name = "Andreas Schmidt", email = ""},
 ]
 dependencies = [
     "pandas>=2.0.3",
@@ -12,12 +12,14 @@ dependencies = [
     "matplotlib>=3.10.3",
     "ace-tools>=0.0",
     "spacy>=3.8.4",
-    "pip>=25.0",
     "python-dotenv>=1.1.0",
     "XlsxWriter>=3.2.3",
     "streamlit>=1.46.1",
 ]
-requires-python = "<3.13,>=3.10"
+requires-python = ">=3.10,<3.13"
 readme = "README.md"
 license = {text = "MIT"}
+
+[tool.uv]
+dev-dependencies = []
 

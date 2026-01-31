@@ -4,20 +4,20 @@ import pandas as pd
 df = pd.read_excel("brotmengen_solawi.xlsx")  # Pfad zur Datei anpassen
 
 # Template definieren
-template = """Hello hello,
+template = """Hallo zusammen,
 
-heute folgt endlich die Abrechnung für die Brote und Zimtschnecken für die Liste in die ihr eingetragen habt. Entschuldigt, dass es etwas gedauert hat.
+hier die zweite Abrechnung für Brote und Zimtschnecken bei der Solawi.
 
-Seit Anfang Mai bis zum 26.6. hattet ihr folgendes abgeholt: 
+Seit Anfang Anfang Juli bis Ende August. hattet ihr folgendes abgeholt: 
 {brot_liste} + {zimt} Zimtschnecken
 
 In Summe wären das {gesamtpreis} €
 
-Bitte überweist den Betrag auf folgendes Konto DE5867250020000936
+Bitte überweist den Betrag auf folgendes Konto DE58 6725 0020 0009 3657 70
 
 Falls es Unklarheiten oder Unstimmigkeiten gibt gerne melden.
 
-Und auch sonst immer gerne Feedback so dass wir uns verbessern können. 
+Aktuell bieten wir nur noch Barzahlung oder paypal an, wollen den Modus aber gerne mit euch auf ein einfacheres Modell umstellen. Dazu mehr bald :)
 
 Besten Dank und viele Grüße
 Euer Südseite Team
