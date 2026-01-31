@@ -1,0 +1,77 @@
+﻿Name,Date,Employee,Task
+Früh,"September 11, 2025 9:00 AM (GMT+2) → 5:00 PM",Nina,Barista
+Spät,"September 18, 2025 2:00 PM (GMT+2) → 7:00 PM",Moritz,Barista
+Spät,"September 5, 2025 1:00 PM (GMT+2) → 7:00 PM",Moritz,Barista
+voll,"September 1, 2025 9:00 AM (GMT+2) → 7:00 PM",Nina,Barista
+voll,"September 2, 2025 9:00 AM (GMT+2) → 7:00 PM",Nina,Barista
+Spät,"September 21, 2025 2:00 PM (GMT+2) → 6:30 PM",Nina,Barista
+Früh,"September 20, 2025 9:00 AM (GMT+2) → 5:00 PM",Nina,Barista
+spät,"September 23, 2025 2:00 PM (GMT+2) → 7:00 PM",Nina,Barista
+spät,"September 22, 2025 2:00 PM (GMT+2) → 8:00 PM",Yannis,Barista
+Früh,"September 24, 2025 9:00 AM (GMT+2) → 2:00 PM",Michael,Barista
+voll,"September 25, 2025 9:00 AM (GMT+2) → 7:00 PM",Nina,Barista
+voll,"September 26, 2025 8:00 AM (GMT+2) → 4:00 PM",Nina,Barista
+voll,"September 29, 2025 9:00 AM (GMT+2) → 5:00 PM",Nina,Barista
+Früh,"September 30, 2025 9:00 AM (GMT+2) → 2:00 PM",Elio,Barista
+Spät,"September 6, 2025 11:00 AM (GMT+2) → 7:00 PM",Kenta,Barista
+Früh,"September 7, 2025 10:00 AM (GMT+2) → 6:00 PM",Kenta,Barista
+Früh,"September 13, 2025 9:00 AM (GMT+2) → 5:00 PM",Kenta,Barista
+Voll,"September 14, 2025 10:00 AM (GMT+2) → 7:00 PM",Kenta,Barista
+Früh,"September 17, 2025 9:00 AM (GMT+2) → 2:00 PM",Max,Barista
+Spät,"September 19, 2025 2:00 PM (GMT+2) → 7:00 PM",Leland,Barista
+Früh,"September 21, 2025 10:00 AM (GMT+2) → 2:00 PM",Leland,Barista
+Früh,"September 27, 2025 9:00 AM (GMT+2) → 5:00 PM",Kenta,Barista
+Früh,"September 28, 2025 10:00 AM (GMT+2) → 2:00 PM",Max,Barista
+Sarah,"September 12, 2025 9:00 AM (GMT+2) → 2:00 PM",Sarah,Barista
+Spät,"September 13, 2025 1:00 PM (GMT+2) → 7:00 PM",Sarah,Barista
+Voll,"September 15, 2025 8:00 AM (GMT+2) → 4:00 PM",Nina,Barista
+Spät,"September 16, 2025 2:00 PM (GMT+2) → 7:00 PM",Sarah,Barista
+Früh,"September 18, 2025 9:00 AM (GMT+2) → 2:00 PM",Sarah,Barista
+Spät,"September 20, 2025 2:00 PM (GMT+2) → 7:00 PM",Sarah,Barista
+Service,"September 12, 2025 1:00 PM (GMT+2) → 5:00 PM",Sarah Sauerborn,Service
+(Service),"September 15, 2025 1:00 PM (GMT+2) → 5:00 PM",Sarah Sauerborn,Service
+(Service),"September 16, 2025 1:00 PM (GMT+2) → 5:00 PM",Franzi,Service
+Service,"September 18, 2025 1:00 PM (GMT+2) → 5:00 PM",Franzi,Service
+Service,"September 24, 2025 1:00 PM (GMT+2) → 5:00 PM",Sarah Sauerborn,Service
+(Service),"September 30, 2025 1:00 PM (GMT+2) → 5:00 PM",Sarah Sauerborn,Service
+Früh,"September 5, 2025 9:00 AM (GMT+2) → 5:00 PM",Kenta,Barista
+Voll,"September 10, 2025 9:00 AM (GMT+2) → 7:00 PM",Nina,Barista
+Spät,"September 9, 2025 2:00 PM (GMT+2) → 7:00 PM",Nina,Barista
+Spät,"September 11, 2025 1:30 PM (GMT+2) → 7:00 PM",Emil,Barista
+Spät,"September 12, 2025 2:00 PM (GMT+2) → 7:00 PM",Emil,Barista
+Service,"September 3, 2025 2:00 PM (GMT+2) → 5:00 PM",Elio,Service
+Service,"September 13, 2025 11:00 AM (GMT+2) → 6:00 PM",Franzi,Service
+Service,"September 14, 2025 10:30 AM (GMT+2) → 5:00 PM",Franzi,Service
+Alex,"September 20, 2025 11:00 AM (GMT+2) → 6:00 PM",Alex,Service
+Service,"September 25, 2025 1:00 PM (GMT+2) → 5:00 PM",Alex,Service
+Alex,"September 27, 2025 8:00 AM (GMT+2) → 4:00 PM",Alex,Service
+(Service),"September 29, 2025 1:00 PM (GMT+2) → 5:00 PM",Alex,Service
+Service,"September 7, 2025 11:00 AM (GMT+2) → 7:00 PM",Alex,Barista
+Service,"September 10, 2025 1:00 PM (GMT+2) → 5:00 PM",Elio,Service
+Früh,"September 16, 2025 9:00 AM (GMT+2) → 2:00 PM",Elio,Barista
+Früh,"September 23, 2025 9:00 AM (GMT+2) → 5:00 PM",Yannis,Barista
+Spät,"September 24, 2025 2:00 PM (GMT+2) → 7:00 PM",Elio,Barista
+Elio,"September 26, 2025 8:00 AM (GMT+2) → 4:00 PM",Elio,Barista
+Spät?,"September 27, 2025 2:00 PM (GMT+2) → 7:00 PM",,Barista
+Spät,"September 28, 2025 2:00 PM (GMT+2) → 7:00 PM",Till,Barista
+Spät,"September 30, 2025 2:00 PM (GMT+2) → 7:00 PM",Nina,Barista
+Service,"September 11, 2025 1:00 PM (GMT+2) → 5:00 PM",Maya,Service
+Maya,"September 21, 2025 11:00 AM (GMT+2) → 5:30 PM",Maya,Service
+Früh,"September 6, 2025 9:00 AM (GMT+2) → 4:00 PM",Till,Barista
+Service,"September 6, 2025 2:00 PM (GMT+2) → 6:00 PM",Arne,Service
+Früh,"September 4, 2025 9:00 AM (GMT+2) → 2:00 PM",Moritz,Barista
+Spät,"September 4, 2025 2:00 PM (GMT+2) → 7:00 PM",Emil,Barista
+voll,"September 3, 2025 9:00 AM (GMT+2) → 7:00 PM",Nina,Barista
+Service,"September 8, 2025 2:00 PM (GMT+2) → 5:00 PM",Leland,Service
+Service,"September 1, 2025 2:00 PM (GMT+2) → 5:00 PM",Sarah,Service
+Service,"September 2, 2025 1:00 PM (GMT+2) → 5:00 PM",Yannis,Service
+Früh,"September 9, 2025 9:00 AM (GMT+2) → 5:00 PM",Emil,Barista
+Voll,"September 8, 2025 9:00 AM (GMT+2) → 7:00 PM",Nina,Barista
+Service,"September 4, 2025 1:00 PM (GMT+2) → 5:00 PM",Leland,Service
+Spät,"September 17, 2025 2:00 PM (GMT+2) → 7:00 PM",Nina,Barista
+Früh,"September 19, 2025 9:00 AM (GMT+2) → 2:00 PM",Sarah,Barista
+Alex,"September 19, 2025 1:00 PM (GMT+2) → 5:00 PM",Alex,Service
+(Service),"September 22, 2025 8:00 AM (GMT+2) → 4:00 PM",Sarah Sauerborn,Service
+Früh,"September 22, 2025 9:00 AM (GMT+2) → 2:00 PM",Nina,Barista
+Service,"September 28, 2025 11:00 AM (GMT+2) → 5:00 PM",Maya,Service
+Service,"September 17, 2025 1:00 PM (GMT+2) → 5:00 PM",Leland,Service

@@ -8,6 +8,8 @@ COPY uv.lock /app/uv.lock
 RUN uv sync --frozen
 
 COPY testapp.py /app/testapp.py
+COPY app_files /app/app_files
+COPY .streamlit /app/.streamlit
 COPY .env /app/.env
 
 EXPOSE 8501

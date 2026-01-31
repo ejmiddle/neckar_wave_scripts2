@@ -1,0 +1,8 @@
+FROM qdrant/qdrant:v1.12.6
+
+# Put a stable launcher in a standard PATH location
+COPY start-qdrant.sh /usr/local/bin/start-qdrant.sh
+RUN chmod +x /usr/local/bin/start-qdrant.sh \
+  && cp /qdrant/qdrant /usr/local/bin/qdrant
+
+ENTRYPOINT ["/usr/local/bin/start-qdrant.sh"]

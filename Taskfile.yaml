@@ -1,0 +1,129 @@
+version: '3'
+
+tasks:
+  default:
+    desc: Show available tasks
+    cmds:
+      - task --list
+
+  install:
+    desc: Install dependencies using uv
+    cmds:
+      - uv sync
+    sources:
+      - pyproject.toml
+      - uv.lock
+
+  runapp:
+    desc: Run the Streamlit app
+    deps: [install]
+    cmds:
+      - uv run streamlit run app.py
+    interactive: true
+
+  runtestapp:
+    desc: Run testapp.py with environment from .env
+    deps: [install]
+    cmds:
+      - set -a; source .env; set +a; uv run streamlit run testapp.py
+    interactive: true
+
+  notion_check:
+    desc: Run Notion access check (set NOTION_DATABASE_ID or pass as arg)
+    deps: [install]
+    cmds:
+      - set -a; source .env; set +a; uv run python scripts/check_notion_access.py {{.DATABASE_ID}} {{.CLI_ARGS}}
+    vars:
+      DATABASE_ID: '{{.DATABASE_ID | default ""}}'
+      CLI_ARGS: '{{.CLI_ARGS | default ""}}'
+
+  notion_copy:
+    desc: Copy a Notion database schema into the same parent (set NOTION_DATABASE_ID or pass as arg)
+    deps: [install]
+    cmds:
+      - set -a; source .env; set +a; uv run python scripts/check_notion_access.py {{.DATABASE_ID}} --copy {{.CLI_ARGS}}
+    vars:
+      DATABASE_ID: '{{.DATABASE_ID | default ""}}'
+      CLI_ARGS: '{{.CLI_ARGS | default ""}}'
+
+  notion_copy_rows:
+    desc: Copy a Notion database schema + rows into the same parent (set NOTION_DATABASE_ID or pass as arg)
+    deps: [install]
+    cmds:
+      - set -a; source .env; set +a; uv run python scripts/check_notion_access.py {{.DATABASE_ID}} --copy --copy-rows {{.CLI_ARGS}}
+    vars:
+      DATABASE_ID: '{{.DATABASE_ID | default ""}}'
+      CLI_ARGS: '{{.CLI_ARGS | default ""}}'
+
+  ping_test_internet:
+    desc: Run the internet ping test script
+    deps: [install]
+    cmds:
+      - uv run python scripts/ping_test_internet.py monitor
+
+  ping_test_internet_plot:
+    desc: Plot results from the internet ping test logfile
+    deps: [install]
+    cmds:
+      - uv run python scripts/ping_test_internet.py plot
+
+  clean:
+    desc: Clean cache and temporary files
+    cmds:
+      - find . -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+
+  docker_build_testapp:
+    desc: Build amd64 image for mittwald
+    cmds:
+      - docker buildx build --platform linux/amd64 -t ghcr.io/ejmiddle/streamlit-hello:latest --load .
+
+  docker_push_testapp:
+    desc: Push image to GHCR
+    cmds:
+      - docker push ghcr.io/ejmiddle/streamlit-hello:latest
+
+  docker_run_testapp:
+    desc: Run the testapp container locally for testing
+    deps: [docker_build_amd64]
+    cmds:
+      - docker run --rm --platform linux/amd64 -p 8501:8501 ghcr.io/ejmiddle/streamlit-hello:latest
+    interactive: true
+
+  docker_build_fastapi_amd64:
+    desc: Build amd64 FastAPI backend image
+    cmds:
+      - docker buildx build --platform linux/amd64 -t ghcr.io/ejmiddle/fastapi-backend:latest --load -f Dockerfile.fastapi .
+
+  docker_push_fastapi:
+    desc: Push FastAPI backend image to GHCR
+    cmds:
+      - docker push ghcr.io/ejmiddle/fastapi-backend:latest
+
+  docker_run_fastapi:
+    desc: Run the FastAPI backend container locally for testing
+    deps: [docker_build_fastapi_amd64]
+    cmds:
+      - docker run --rm --platform linux/amd64 -p 8000:8000 ghcr.io/ejmiddle/fastapi-backend:latest
+    interactive: true
+
+
+  qdrant_up:
+    desc: Start a local Qdrant server (latest stable)
+    cmds:
+      - mkdir -p qdrant_storage
+      - docker run --rm -d --name qdrant -p 6333:6333 -p 6334:6334 -v "$(pwd)/qdrant_storage:/qdrant/storage" qdrant/qdrant:latest
+
+  qdrant_down:
+    desc: Stop the local Qdrant server
+    cmds:
+      - docker stop qdrant
+
+  qdrant_logs:
+    desc: Follow logs from the local Qdrant server
+    cmds:
+      - docker logs -f qdrant
+
+  qdrant_test:
+    desc: Test the local Qdrant server health endpoint
+    cmds:
+      - python3 scripts/test_qdrant.py
