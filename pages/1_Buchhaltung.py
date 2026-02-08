@@ -2,52 +2,28 @@ import streamlit as st
 import pandas as pd
 import os
 from buchhaltung_auswertung import eval_location, eval_gutscheine_location
+from app_paths import BUCHHALTUNG_DIR
 
 # Page title
 st.title("📊 Buchhaltung")
+base_path = BUCHHALTUNG_DIR
+
 
 def validate_folder_structure(date_range: str, location: str) -> bool:
     """Validate that required folders exist for the given parameters."""
-    base_path = "buchhaltungsberichte"
-    
     detailed_folder = f"{base_path}/{location}/buchhaltungsbericht-detaillierter-{date_range}/"
     orders_folder = f"{base_path}/{location}/Auftragsbericht-{date_range}/"
-    
+
     if not os.path.exists(detailed_folder):
         st.error(f"❌ Missing folder: {detailed_folder}")
         return False
-    
+
     if not os.path.exists(orders_folder):
         st.error(f"❌ Missing folder: {orders_folder}")
         return False
-    
+
     st.success(f"✅ Required folders exist for {location} - {date_range}")
     return True
-
-def display_folder_requirements():
-    """Display folder requirements in an organized way."""
-    with st.expander("📁 Folder Requirements", expanded=False):
-        st.markdown("""
-        ### Required Folder Structure
-        
-        For each combination of `location` and `date_range`, the following folders must exist:
-        
-        **📊 Detailed Reports Folder:**
-        ```
-        buchhaltungsberichte/{location}/buchhaltungsbericht-detaillierter-{date_range}/
-        ```
-        
-        **📋 Order Reports Folder:**
-        ```
-        buchhaltungsberichte/{location}/Auftragsbericht-{date_range}/
-        ```
-        
-        **📝 Notes:**
-        - Replace `{location}` with either `WIE` or `ALT`
-        - Replace `{date_range}` with format: `2025-05-01_2025-05-31`
-        - Folders come from 'Buchführung' and 'Bestellungen' in SumUp app
-        - Ensure folders contain the necessary CSV files before running functions
-        """)
 
 def run_evaluation(eval_func, func_name: str, date_range: str, location: str):
     """Run evaluation function with proper error handling."""
@@ -61,7 +37,7 @@ def run_evaluation(eval_func, func_name: str, date_range: str, location: str):
         
         # Show output file if it exists
         if func_name == "Location Evaluation":
-            output_file = f"buchhaltungsberichte/{location}/output_file_{location}_{date_range}.xlsx"
+            output_file = f"{base_path}/{location}/output_file_{location}_{date_range}.xlsx"
             if os.path.exists(output_file):
                 with open(output_file, "rb") as f:
                     st.download_button(
@@ -72,7 +48,7 @@ def run_evaluation(eval_func, func_name: str, date_range: str, location: str):
                         use_container_width=True
                     )
         elif func_name == "Gutscheine Evaluation":
-            output_file = f"buchhaltungsberichte/{location}/output_file_zahlungen_{location}_{date_range}.xlsx"
+            output_file = f"{base_path}/{location}/output_file_zahlungen_{location}_{date_range}.xlsx"
             if os.path.exists(output_file):
                 with open(output_file, "rb") as f:
                     st.download_button(
@@ -114,9 +90,6 @@ def get_last_month_date_range():
 # Get date ranges
 last_month_date_range = get_last_month_date_range()
 
-# Display folder requirements
-display_folder_requirements()
-
 # Input section
 st.header("🔧 Input Parameters")
 
@@ -154,8 +127,8 @@ with col2:
 st.header("📊 Major Results")
 
 # Check for existing results files
-location_eval_file = f"buchhaltungsberichte/umsatz_eval_{location}_{date_range}.xlsx"
-gutscheine_eval_file = f"buchhaltungsberichte/gutschein_eval_{location}_{date_range}.xlsx"
+location_eval_file = f"{base_path}/umsatz_eval_{location}_{date_range}.xlsx"
+gutscheine_eval_file = f"{base_path}/gutschein_eval_{location}_{date_range}.xlsx"
 
 if os.path.exists(location_eval_file):
     st.subheader(f"📍 {location} - Location Evaluation Results")

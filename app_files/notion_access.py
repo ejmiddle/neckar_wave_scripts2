@@ -10,6 +10,7 @@ load_dotenv()
 
 DEFAULT_DATABASE_ID = "1ea4e28bdf9e8074ba94e2c410731c50"
 DEFAULT_DATE_PROPERTY = os.getenv("NOTION_DATE_PROPERTY", "Date")
+DEFAULT_ORDER_DB_TITLE = os.getenv("NOTION_ORDER_DB_TITLE", "Bestellungen")
 
 
 class NotionRequestError(RuntimeError):
@@ -149,3 +150,143 @@ def get_notion_orders_from_today(
         rows.append(flatten_properties(props))
 
     return pd.DataFrame(rows)
+
+
+def build_order_database_properties() -> Dict[str, Any]:
+    return {
+        "Produkt": {"title": {}},
+        "Menge": {"number": {"format": "number"}},
+        "Datum": {"date": {}},
+        "Notiz/Kunde": {"rich_text": {}},
+        "Abgeholt": {
+            "select": {
+                "options": [
+                    {"name": "Nein"},
+                    {"name": "Ja"},
+                ]
+            }
+        },
+        "Eintragender": {"rich_text": {}},
+        "Wohin": {
+            "select": {
+                "options": [
+                    {"name": "Wieblingen"},
+                    {"name": "Roest"},
+                ]
+            }
+        },
+        "Zahlung": {
+            "select": {
+                "options": [
+                    {"name": "Vor Ort"},
+                    {"name": "Online"},
+                ]
+            }
+        },
+    }
+
+
+def create_order_database(
+    page_id: str,
+    title: str | None = None,
+    properties: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    token = os.getenv("NOTION_TOKEN")
+    if not token:
+        raise RuntimeError("Missing NOTION_TOKEN in environment or .env")
+    payload = {
+        "parent": {"page_id": page_id},
+        "title": [{"type": "text", "text": {"content": title or DEFAULT_ORDER_DB_TITLE}}],
+        "properties": properties or build_order_database_properties(),
+    }
+    return notion_request("POST", "/databases", token, payload)
+
+
+def _normalize_order_date(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        try:
+            return date.fromisoformat(cleaned).isoformat()
+        except ValueError:
+            pass
+        try:
+            return datetime.strptime(cleaned, "%d.%m.%Y").date().isoformat()
+        except ValueError:
+            return None
+    return None
+
+
+def _text_prop(value: Any) -> Dict[str, Any] | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    return {"rich_text": [{"type": "text", "text": {"content": text}}]}
+
+
+def _title_prop(value: Any) -> Dict[str, Any]:
+    text = str(value or "").strip() or "Unbenannt"
+    return {"title": [{"type": "text", "text": {"content": text}}]}
+
+
+def _select_prop(value: Any) -> Dict[str, Any] | None:
+    if value is None:
+        return None
+    name = str(value).strip()
+    if not name:
+        return None
+    return {"select": {"name": name}}
+
+
+def insert_orders(
+    database_id: str,
+    orders: Iterable[Dict[str, Any]],
+) -> int:
+    token = os.getenv("NOTION_TOKEN")
+    if not token:
+        raise RuntimeError("Missing NOTION_TOKEN in environment or .env")
+    count = 0
+    for order in orders:
+        properties: Dict[str, Any] = {
+            "Produkt": _title_prop(order.get("Produkt")),
+        }
+        if order.get("Menge") is not None:
+            properties["Menge"] = {"number": order.get("Menge")}
+
+        date_value = _normalize_order_date(order.get("Datum"))
+        if date_value:
+            properties["Datum"] = {"date": {"start": date_value}}
+
+        text_prop = _text_prop(order.get("Notiz/Kunde"))
+        if text_prop:
+            properties["Notiz/Kunde"] = text_prop
+
+        select_prop = _select_prop(order.get("Abgeholt"))
+        if select_prop:
+            properties["Abgeholt"] = select_prop
+
+        text_prop = _text_prop(order.get("Eintragender"))
+        if text_prop:
+            properties["Eintragender"] = text_prop
+
+        select_prop = _select_prop(order.get("Wohin"))
+        if select_prop:
+            properties["Wohin"] = select_prop
+
+        select_prop = _select_prop(order.get("Zahlung"))
+        if select_prop:
+            properties["Zahlung"] = select_prop
+
+        payload = {"parent": {"database_id": database_id}, "properties": properties}
+        notion_request("POST", "/pages", token, payload)
+        count += 1
+    return count

@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import os
 from io import BytesIO
+from app_paths import TRINKGELD_DATA_DIR
 
 # Page title
 st.title("💰 Trinkgeld Management")
@@ -215,12 +216,12 @@ def display_verification_results(verification_data):
 
 def get_available_trinkgeld_files():
     """Get list of available Trinkgeld Excel files."""
-    trinkgeld_dir = "Trinkgeld_Tabellen"
+    trinkgeld_dir = TRINKGELD_DATA_DIR
     if not os.path.exists(trinkgeld_dir):
         return []
     
-    excel_files = [f for f in os.listdir(trinkgeld_dir) 
-                   if f.endswith(('.xlsx', '.xls'))]
+    excel_files = [f for f in os.listdir(trinkgeld_dir)
+                   if f.endswith((".xlsx", ".xls"))]
     return sorted(excel_files)
 
 def create_excel_download(result_df, verification_data):
@@ -295,7 +296,7 @@ if uploaded_file is not None or selected_file is not None:
             file_name = uploaded_file.name
             st.info(f"📄 Processing uploaded file: {file_name}")
         else:
-            file_path = os.path.join("Trinkgeld_Tabellen", selected_file)
+            file_path = TRINKGELD_DATA_DIR / selected_file
             df = pd.read_excel(file_path, sheet_name='Tabelle1')
             file_name = selected_file
             st.info(f"📄 Processing selected file: {file_name}")
@@ -379,4 +380,3 @@ if 'trinkgeld_results' in st.session_state and 'trinkgeld_verification' in st.se
             if key in st.session_state:
                 del st.session_state[key]
         st.rerun()
-

@@ -15,17 +15,10 @@ tasks:
       - uv.lock
 
   runapp:
-    desc: Run the Streamlit app
+    desc: Run app.py with environment from .env
     deps: [install]
     cmds:
-      - uv run streamlit run app.py
-    interactive: true
-
-  runtestapp:
-    desc: Run testapp.py with environment from .env
-    deps: [install]
-    cmds:
-      - set -a; source .env; set +a; uv run streamlit run testapp.py
+      - set -a; source .env; set +a; uv run streamlit run app.py
     interactive: true
 
   notion_check:
@@ -72,19 +65,19 @@ tasks:
     cmds:
       - find . -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
 
-  docker_build_testapp:
+  docker_build_app:
     desc: Build amd64 image for mittwald
     cmds:
-      - docker buildx build --platform linux/amd64 -t ghcr.io/ejmiddle/streamlit-hello:latest --load .
+      - docker buildx build --platform linux/amd64 -t ghcr.io/ejmiddle/streamlit-hello:latest --load -f Dockerfile .
 
-  docker_push_testapp:
+  docker_push_app:
     desc: Push image to GHCR
     cmds:
       - docker push ghcr.io/ejmiddle/streamlit-hello:latest
 
-  docker_run_testapp:
-    desc: Run the testapp container locally for testing
-    deps: [docker_build_amd64]
+  docker_run_app:
+    desc: Run the app container locally for testing
+    deps: [docker_build_app]
     cmds:
       - docker run --rm --platform linux/amd64 -p 8501:8501 ghcr.io/ejmiddle/streamlit-hello:latest
     interactive: true

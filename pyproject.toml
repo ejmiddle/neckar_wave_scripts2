@@ -15,6 +15,8 @@ dependencies = [
     "python-dotenv>=1.1.0",
     "XlsxWriter>=3.2.3",
     "streamlit>=1.46.1",
+    "openai-whisper",
+    "openai",
 ]
 requires-python = ">=3.10,<3.13"
 readme = "README.md"
@@ -22,4 +24,3 @@ license = {text = "MIT"}
 
 [tool.uv]
 dev-dependencies = []
-

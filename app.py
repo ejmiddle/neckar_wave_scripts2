@@ -1,9 +1,18 @@
 # streamlit_app.py
 
-import streamlit as st
 import os
-from datetime import datetime
 from pathlib import Path
+
+import streamlit as st
+
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env")
+except ModuleNotFoundError:
+    pass
+from datetime import datetime
+from app_paths import BUCHHALTUNG_DIR, SCHICHTPLAN_DATA_DIR, TRINKGELD_DATA_DIR
 
 # Configuration
 st.set_page_config(
@@ -43,6 +52,18 @@ def get_app_settings():
                 "description": "Quarterly evaluation and Gutschein analysis tools",
                 "path": "pages/4_Quartal_Eval.py",
                 "icon": "📈"
+            },
+            "order_erfassung": {
+                "title": "🧾 Order Erfassung",
+                "description": "Order intake and processing tools",
+                "path": "pages/5_Order_Erfassung.py",
+                "icon": "🧾"
+            },
+            "shopify_qdrant": {
+                "title": "🛒 Shopify & Qdrant",
+                "description": "Shopify order analysis and Qdrant demo tools",
+                "path": "pages/6_Shopify_Qdrant.py",
+                "icon": "🛒"
             },
         }
     }
@@ -108,7 +129,7 @@ def show_system_info_page():
     st.write(f"**Working Directory:** {os.getcwd()}")
     
     # Check if required directories exist
-    required_dirs = ["buchhaltungsberichte", "Schichtplan", "Trinkgeld_Tabellen", "pages"]
+    required_dirs = [BUCHHALTUNG_DIR, SCHICHTPLAN_DATA_DIR, TRINKGELD_DATA_DIR, "Schichtplan", "pages"]
     st.write("**Required Directories:**")
     for dir_name in required_dirs:
         if os.path.exists(dir_name):
@@ -127,7 +148,7 @@ def validate_environment():
     issues = []
     
     # Check for required directories
-    required_dirs = ["buchhaltungsberichte", "Schichtplan", "Trinkgeld_Tabellen"]
+    required_dirs = [BUCHHALTUNG_DIR, SCHICHTPLAN_DATA_DIR, TRINKGELD_DATA_DIR]
     for dir_name in required_dirs:
         if not os.path.exists(dir_name):
             issues.append(f"Missing directory: {dir_name}")
@@ -170,7 +191,7 @@ def main():
         st.divider()
         st.subheader("🚀 Quick Actions")
         
-        col1, col2, col3, col4 = st.columns(4)
+        col1, col2, col3, col4, col5, col6 = st.columns(6)
         
         with col1:
             if st.button("📊 Go to Buchhaltung", use_container_width=True):
@@ -188,7 +209,14 @@ def main():
             if st.button("📈 Go to Quartal Eval", use_container_width=True):
                 st.switch_page("pages/4_Quartal_Eval.py")
 
+        with col5:
+            if st.button("🧾 Go to Order Erfassung", use_container_width=True):
+                st.switch_page("pages/5_Order_Erfassung.py")
+
+        with col6:
+            if st.button("🛒 Go to Shopify & Qdrant", use_container_width=True):
+                st.switch_page("pages/6_Shopify_Qdrant.py")
+
 # Run the main application
 if __name__ == "__main__":
     main()
-

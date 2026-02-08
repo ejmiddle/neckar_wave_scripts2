@@ -5,11 +5,11 @@ Nutzung:
 """
 
 import pandas as pd
-import os
+from app_paths import BUCHHALTUNG_DIR
 
 def eval_location(date_range, location):
 
-    main_folder = "buchhaltungsberichte"
+    main_folder = BUCHHALTUNG_DIR
     # --- Load and process tax report ---
     tax_file_path = f"{main_folder}/{location}/buchhaltungsbericht-detaillierter-{date_range}/buchhaltungsbericht-detaillierter-tax-{date_range}.csv"
     df_tax = pd.read_csv(tax_file_path, sep=';')
@@ -44,7 +44,7 @@ def eval_location(date_range, location):
 
 def eval_gutscheine_location(date_range, location):
 
-    main_folder = "buchhaltungsberichte"
+    main_folder = BUCHHALTUNG_DIR
     # --- Evaluate gift cards / vouchers ---
     product_file_path = f"{main_folder}/{location}/Auftragsbericht-{date_range}/Bericht-Aufträge-Produkte-{date_range}.csv"
     df_products = pd.read_csv(product_file_path, sep=';')
@@ -79,4 +79,3 @@ eval_gutscheine_location(date_range, location)
 location = "ALT"
 eval_location(date_range, location)
 eval_gutscheine_location(date_range, location)
-

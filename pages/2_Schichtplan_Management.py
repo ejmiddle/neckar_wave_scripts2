@@ -2,12 +2,13 @@ import streamlit as st
 import pandas as pd
 import os
 import datetime
-from Schichtplan.schichtplan_utils import generate_schichtplan
+from app_files.schichtplan_utils import generate_schichtplan
+from app_paths import SCHICHTPLAN_DATA_DIR
 
 # Page title
 st.title("👥 Schichtplan Management")
 
-PERSON_INFO_EXCEL_PATH = os.path.join("Schichtplan", "mitarbeiter_info.xlsx")
+PERSON_INFO_EXCEL_PATH = SCHICHTPLAN_DATA_DIR / "mitarbeiter_info.xlsx"
 
 # Fixed schedules configuration (weekly recurring shifts)
 FIXED_SCHEDULES = {
@@ -147,11 +148,11 @@ def get_next_month_dates():
 
 def get_available_schichtplan_files():
     """Get list of available schichtplan files from the availabilities folder."""
-    availabilities_dir = os.path.join("Schichtplan", "availabilities")
+    availabilities_dir = SCHICHTPLAN_DATA_DIR / "availabilities"
     if not os.path.exists(availabilities_dir):
         return []
     
-    csv_files = [f for f in os.listdir(availabilities_dir) if f.endswith('.csv')]
+    csv_files = [f for f in os.listdir(availabilities_dir) if f.endswith(".csv")]
     return sorted(csv_files)
 
 def save_uploaded_file(uploaded_file):
@@ -160,11 +161,11 @@ def save_uploaded_file(uploaded_file):
         return None
     
     # Create availabilities directory if it doesn't exist
-    availabilities_dir = os.path.join("Schichtplan", "availabilities")
+    availabilities_dir = SCHICHTPLAN_DATA_DIR / "availabilities"
     os.makedirs(availabilities_dir, exist_ok=True)
     
     # Save file with original name
-    file_path = os.path.join(availabilities_dir, uploaded_file.name)
+    file_path = availabilities_dir / uploaded_file.name
     with open(file_path, "wb") as f:
         f.write(uploaded_file.read())
     
@@ -178,7 +179,7 @@ def quick_format_validation(csv_file_path):
             return {'valid': False, 'message': "Missing 'Wann?' column"}
         
         # Test parse 3 unique timespan formats
-        from Schichtplan.schichtplan_utils import parse_wann
+        from app_files.schichtplan_utils import parse_wann
         unique_spans = df['Wann?'].dropna().unique()[:3]
         
         if len(unique_spans) == 0:
@@ -223,7 +224,7 @@ def perform_upload_evaluation(csv_file_path, person_info):
         person_info_names = set(name_list)
         
         # Import the matching function from schichtplan_utils
-        from Schichtplan.schichtplan_utils import match_name
+        from app_files.schichtplan_utils import match_name
         
         # Perform name matching analysis similar to generate_schichtplan
         unique_names_set = set(original_unique_names)
@@ -435,11 +436,11 @@ if selected_file and schichtplan_start_date and schichtplan_end_date:
     if st.button("🔄 Generate Schichtplan Export", use_container_width=True):
         try:
             # Create temp directory for outputs
-            temp_dir = "Schichtplan"
+            temp_dir = SCHICHTPLAN_DATA_DIR / "exports"
             os.makedirs(temp_dir, exist_ok=True)
             
             # Use the selected file from availabilities folder
-            selected_file_path = os.path.join("Schichtplan", "availabilities", selected_file)
+            selected_file_path = SCHICHTPLAN_DATA_DIR / "availabilities" / selected_file
             
             # Convert person_info_data to the expected format
             person_info = []

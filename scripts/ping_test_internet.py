@@ -167,6 +167,8 @@ def plot_results(logfile="ping_log.csv", output_path=None):
     # Zeitspalte konvertieren
     df["timestamp"] = pd.to_datetime(df["timestamp"])
 
+    analyze_results(df)
+
     fig, axes = plt.subplots(3, 1, figsize=(12, 9), sharex=True)
 
     # Plot 1: Latenz über Zeit (Gateway + Public)
@@ -227,6 +229,55 @@ def plot_results(logfile="ping_log.csv", output_path=None):
         fig_hist.savefig(hist_path, dpi=150)
     else:
         plt.show()
+
+
+def analyze_results(df):
+    """Print a lightweight analysis for mentionable errors."""
+    rows = len(df)
+    if rows == 0:
+        print("Analysis: no data rows found.")
+        return
+
+    issues = []
+    loss_cols = {
+        "gateway_packet_loss": "Gateway packet loss",
+        "public_packet_loss": "Public packet loss",
+        "dns_failed": "DNS failures",
+        "https_failed": "HTTPS failures",
+    }
+    for col, label in loss_cols.items():
+        if col in df.columns:
+            count = int(df[col].sum())
+            if count > 0:
+                issues.append(f"{label}: {count}/{rows} ({(count/rows)*100:.1f}%)")
+
+    # Detect large time gaps vs median sampling interval
+    if "timestamp" in df.columns:
+        deltas = df["timestamp"].sort_values().diff().dt.total_seconds().dropna()
+        if len(deltas) > 0:
+            median_interval = deltas.median()
+            gap_threshold = max(median_interval * 2.5, median_interval + 5)
+            gap_count = int((deltas > gap_threshold).sum())
+            if gap_count > 0:
+                issues.append(f"Sampling gaps: {gap_count} gaps > {gap_threshold:.1f}s")
+
+    # Latency spikes (public) using a robust threshold
+    if "public_latency_ms" in df.columns:
+        lat = df["public_latency_ms"].dropna()
+        if len(lat) > 0:
+            median = lat.median()
+            mad = (lat - median).abs().median()
+            spike_threshold = median + max(3 * mad, 50)
+            spike_count = int((lat > spike_threshold).sum())
+            if spike_count > 0:
+                issues.append(f"Public latency spikes: {spike_count} samples > {spike_threshold:.1f} ms")
+
+    if issues:
+        print("Analysis: mentionable issues detected:")
+        for item in issues:
+            print(f"  - {item}")
+    else:
+        print("Analysis: no mentionable issues detected.")
 
 
 # --------------------------------------------------------------

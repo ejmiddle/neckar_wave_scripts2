@@ -7,10 +7,10 @@ COPY pyproject.toml /app/pyproject.toml
 COPY uv.lock /app/uv.lock
 RUN uv sync --frozen
 
-COPY testapp.py /app/testapp.py
+COPY app.py /app/app.py
 COPY app_files /app/app_files
 COPY .streamlit /app/.streamlit
 COPY .env /app/.env
 
 EXPOSE 8501
-CMD ["uv", "run", "streamlit", "run", "testapp.py", "--server.address=0.0.0.0", "--server.port=8501"]
+CMD ["uv", "run", "streamlit", "run", "app.py", "--server.address=0.0.0.0", "--server.port=8501"]
