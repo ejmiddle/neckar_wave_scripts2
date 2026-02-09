@@ -1,8 +1,7 @@
 import streamlit as st
 
-from app_files.bestellungen_analyse import bestellungen_analyse
-from app_files.qdrant_eval import render_qdrant_tab
-
+from src.bestellungen_analyse import bestellungen_analyse
+from src.qdrant_eval import render_qdrant_tab
 
 st.title("🛒 Shopify & Qdrant")
 

@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import functools
 import json
 from copy import deepcopy
 from pathlib import Path
+
+import pandas as pd
+
+from src.app_paths import DATA_DIR
 
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "data" / "order_extraction_prompt.json"
 
@@ -46,6 +51,39 @@ DEFAULT_FIELD_DESCRIPTIONS = {
     "Wohin": "Lieferort oder Abholort.",
     "Zahlung": "Zahlungsart (z.B. Vor Ort, Rechnung, schon bezahlt).",
 }
+
+@functools.lru_cache(maxsize=1)
+def load_product_list() -> pd.DataFrame:
+    file_path = DATA_DIR / "Produktliste_Order_Erfassung.xlsx"
+    return pd.read_excel(file_path)
+
+
+def _load_products_for_defaults() -> list[str]:
+    try:
+        df = load_product_list()
+    except FileNotFoundError:
+        return []
+    if "Produktbezeichnung" not in df.columns:
+        return []
+    products = (
+        df["Produktbezeichnung"]
+        .dropna()
+        .astype(str)
+        .map(str.strip)
+    )
+    products = [value for value in products.tolist() if value]
+    seen = set()
+    unique = []
+    for value in products:
+        if value not in seen:
+            seen.add(value)
+            unique.append(value)
+    return unique
+
+
+_products_from_excel = _load_products_for_defaults()
+if _products_from_excel:
+    DEFAULT_ALLOWED_VALUES["Produkt"] = _products_from_excel
 
 
 def _ensure_dict(value, fallback):

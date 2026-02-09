@@ -1,0 +1,11 @@
+{
+  "editor.codeActionsOnSave": {
+    "source.organizeImports": "explicit"
+  },
+  "editor.formatOnSave": false,
+  "ruff.enable": true,
+  "ruff.organizeImports": true,
+  "ruff.fixAll": false,
+  "ruff.lint.run": "onSave",
+  "python.analysis.typeCheckingMode": "basic"
+}

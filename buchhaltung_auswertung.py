@@ -5,7 +5,9 @@ Nutzung:
 """
 
 import pandas as pd
-from app_paths import BUCHHALTUNG_DIR
+
+from src.app_paths import BUCHHALTUNG_DIR
+
 
 def eval_location(date_range, location):
 

@@ -11,16 +11,25 @@ dependencies = [
     "seaborn>=0.13.0",
     "matplotlib>=3.10.3",
     "ace-tools>=0.0",
-    "spacy>=3.8.4",
     "python-dotenv>=1.1.0",
     "XlsxWriter>=3.2.3",
     "streamlit>=1.46.1",
-    "openai-whisper",
+    # "openai-whisper",
     "openai",
+    "colorlog>=6.10.1",
 ]
 requires-python = ">=3.10,<3.13"
 readme = "README.md"
 license = {text = "MIT"}
 
 [tool.uv]
-dev-dependencies = []
+dev-dependencies = [
+    "ruff>=0.9.5",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["I"]

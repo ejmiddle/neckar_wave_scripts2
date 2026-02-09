@@ -1,8 +1,10 @@
-import streamlit as st
-import pandas as pd
 import os
 from io import BytesIO
-from app_paths import TRINKGELD_DATA_DIR
+
+import pandas as pd
+import streamlit as st
+
+from src.app_paths import TRINKGELD_DATA_DIR
 
 # Page title
 st.title("💰 Trinkgeld Management")

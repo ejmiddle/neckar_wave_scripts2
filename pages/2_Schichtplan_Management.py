@@ -1,9 +1,11 @@
-import streamlit as st
-import pandas as pd
-import os
 import datetime
-from app_files.schichtplan_utils import generate_schichtplan
-from app_paths import SCHICHTPLAN_DATA_DIR
+import os
+
+import pandas as pd
+import streamlit as st
+
+from src.app_paths import SCHICHTPLAN_DATA_DIR
+from src.schichtplan_utils import generate_schichtplan
 
 # Page title
 st.title("👥 Schichtplan Management")
@@ -179,7 +181,7 @@ def quick_format_validation(csv_file_path):
             return {'valid': False, 'message': "Missing 'Wann?' column"}
         
         # Test parse 3 unique timespan formats
-        from app_files.schichtplan_utils import parse_wann
+        from src.schichtplan_utils import parse_wann
         unique_spans = df['Wann?'].dropna().unique()[:3]
         
         if len(unique_spans) == 0:
@@ -224,7 +226,7 @@ def perform_upload_evaluation(csv_file_path, person_info):
         person_info_names = set(name_list)
         
         # Import the matching function from schichtplan_utils
-        from app_files.schichtplan_utils import match_name
+        from src.schichtplan_utils import match_name
         
         # Perform name matching analysis similar to generate_schichtplan
         unique_names_set = set(original_unique_names)

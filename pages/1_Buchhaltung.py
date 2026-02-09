@@ -1,8 +1,10 @@
-import streamlit as st
-import pandas as pd
 import os
-from buchhaltung_auswertung import eval_location, eval_gutscheine_location
-from app_paths import BUCHHALTUNG_DIR
+
+import pandas as pd
+import streamlit as st
+
+from buchhaltung_auswertung import eval_gutscheine_location, eval_location
+from src.app_paths import BUCHHALTUNG_DIR
 
 # Page title
 st.title("📊 Buchhaltung")

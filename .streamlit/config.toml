@@ -4,3 +4,6 @@ backgroundColor = "#f7f2ea"
 secondaryBackgroundColor = "#efe6d8"
 textColor = "#1f1f1f"
 font = "Lato"
+
+[client]
+showSidebarNavigation = true

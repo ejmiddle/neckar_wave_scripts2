@@ -1,17 +1,15 @@
-from app_files.notion_access import get_notion_orders_from_today
-from app_files.shopify_access import (
-    create_excel_download_button,
-    get_heidelberg_weather,
-    get_last_6_days_orders_with_variants,
-)
-
+from datetime import UTC, datetime, timedelta
+from typing import Optional
 
 import pandas as pd
 import streamlit as st
 
-
-from datetime import UTC, datetime, timedelta
-from typing import Optional
+from src.notion_access import get_notion_orders_from_today
+from src.shopify_access import (
+    create_excel_download_button,
+    get_heidelberg_weather,
+    get_last_6_days_orders_with_variants,
+)
 
 
 def move_column_to_end(df: "pd.DataFrame", column: str) -> "pd.DataFrame":
