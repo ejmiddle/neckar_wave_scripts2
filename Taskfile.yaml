@@ -75,6 +75,7 @@ tasks:
     desc: Push image to GHCR
     cmds:
       - docker push ghcr.io/ejmiddle/streamlit-hello:latest
+      - echo "Tip-> source .env && echo \"$GHCR_TOKEN\" | docker login ghcr.io -u ejmiddle --password-stdin"
 
   docker_run_app:
     desc: Run the app container locally for testing

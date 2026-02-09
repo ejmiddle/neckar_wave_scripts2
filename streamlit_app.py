@@ -35,6 +35,14 @@ st.set_page_config(
     layout="wide",
 )
 
+PRIMARY_PAGE = {
+    "id": "shopify_qdrant",
+    "path": "pages/6_Shopify_Qdrant.py",
+    "title": "Shopify Bestellungen",
+    "description": "Shopify order analysis and Qdrant demo tools",
+    "icon": "🛒",
+}
+
 FEATURE_PAGES = [
     {
         "id": "buchhaltung",
@@ -71,31 +79,33 @@ FEATURE_PAGES = [
         "description": "Order intake and processing tools",
         "icon": "🧾",
     },
-    {
-        "id": "shopify_qdrant",
-        "path": "pages/6_Shopify_Qdrant.py",
-        "title": "Shopify & Qdrant",
-        "description": "Shopify order analysis and Qdrant demo tools",
-        "icon": "🛒",
-    },
 ]
 
-NAV_PAGES = [
-    {
-        "id": "home",
-        "path": "pages/home.py",
-        "title": "Home",
-        "description": "Overview and quick actions",
-        "icon": "🏠",
-    },
-    *FEATURE_PAGES,
-    {
-        "id": "system_info",
-        "path": "pages/system_info.py",
-        "title": "System Info",
-        "description": "Environment diagnostics",
-        "icon": "🔧",
-    },
+NAV_SECTIONS = [
+    (
+        "Shopify Bestellungen",
+        [PRIMARY_PAGE],
+    ),
+    (
+        "Other Pages",
+        [
+            {
+                "id": "home",
+                "path": "pages/home.py",
+                "title": "Home",
+                "description": "Overview and quick actions",
+                "icon": "🏠",
+            },
+            *FEATURE_PAGES,
+            {
+                "id": "system_info",
+                "path": "pages/system_info.py",
+                "title": "System Info",
+                "description": "Environment diagnostics",
+                "icon": "🔧",
+            },
+        ],
+    ),
 ]
 
 
@@ -109,7 +119,7 @@ def get_app_settings() -> dict:
             "path": page["path"],
             "icon": page["icon"],
         }
-        for page in FEATURE_PAGES
+        for page in [PRIMARY_PAGE, *FEATURE_PAGES]
     }
     return {
         "app_name": "Neckar Wave Management",
@@ -126,11 +136,14 @@ def _init_session_state() -> None:
         st.session_state.authenticated = True
 
 
-def _build_navigation_pages() -> list[st.Page]:
-    return [
-        st.Page(page["path"], title=page["title"], icon=page["icon"])
-        for page in NAV_PAGES
-    ]
+def _build_navigation_pages() -> dict[str, list[st.Page]]:
+    return {
+        section_title: [
+            st.Page(page["path"], title=page["title"], icon=page["icon"])
+            for page in section_pages
+        ]
+        for section_title, section_pages in NAV_SECTIONS
+    }
 
 
 def validate_environment() -> list[str]:
@@ -142,10 +155,11 @@ def validate_environment() -> list[str]:
         if not os.path.exists(dir_name):
             issues.append(f"Missing directory: {dir_name}")
 
-    for page_info in NAV_PAGES:
-        page_path = BASE_DIR / page_info["path"]
-        if not page_path.exists():
-            issues.append(f"Missing page file: {page_info['path']}")
+    for _, section_pages in NAV_SECTIONS:
+        for page_info in section_pages:
+            page_path = BASE_DIR / page_info["path"]
+            if not page_path.exists():
+                issues.append(f"Missing page file: {page_info['path']}")
 
     if issues:
         for issue in issues:

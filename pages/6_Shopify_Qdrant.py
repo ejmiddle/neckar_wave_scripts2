@@ -3,7 +3,7 @@ import streamlit as st
 from src.bestellungen_analyse import bestellungen_analyse
 from src.qdrant_eval import render_qdrant_tab
 
-st.title("🛒 Shopify & Qdrant")
+st.title("🛒 Shopify Bestellungen")
 
 tabs = st.tabs(["Shopify", "Qdrant"])
 

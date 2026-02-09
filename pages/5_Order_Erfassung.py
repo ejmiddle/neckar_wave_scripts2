@@ -32,7 +32,6 @@ DEFAULT_NOTION_PAGE_ID = "3014e28bdf9e802183d3efda2854f233"
 HARDCODED_NOTION_DATABASE_ID = "3014e28bdf9e812c93e7e970dd3146b1"
 
 st.title("🧾 Bestellungen erfassen")
-st.write(DEFAULT_ALLOWED_VALUES)
 
 audio_col, eintragender_col, reset_col = st.columns([4, 3, 1], vertical_alignment="bottom")
 if "audio_reset" not in st.session_state:
