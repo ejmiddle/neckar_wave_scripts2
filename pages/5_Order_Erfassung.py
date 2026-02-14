@@ -7,7 +7,6 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from src.app_paths import DATA_DIR
 from src.logging_config import logger
 from src.notion_access import (
     DEFAULT_ORDER_DB_TITLE,
@@ -16,16 +15,17 @@ from src.notion_access import (
     insert_orders,
 )
 from src.order_prompt_config import (
-    DEFAULT_ALLOWED_VALUES,
-    DEFAULT_FIELD_DESCRIPTIONS,
-    DEFAULT_OUTPUT_SCHEMA,
     DEFAULT_SYSTEM_PROMPT,
-    apply_default_eintragender,
+    allowed_product_values,
+    build_transcript_user_prompt,
     build_system_prompt_with_descriptions,
-    load_product_list,
+    default_output_schema,
+    field_descriptions_from_model,
     load_prompt_config,
+    output_schema_json_schema,
     save_prompt_config,
 )
+from src.structured_extraction import extract_with_repair, get_tools_for_target
 
 DEFAULT_NOTION_PAGE_ID = "3014e28bdf9e802183d3efda2854f233"
 # Fill this once the database exists, to skip re-creating it.
@@ -50,7 +50,7 @@ with eintragender_col:
     )
     st.session_state["default_eintragender"] = default_eintragender
 with reset_col:
-    if st.button("Reset", use_container_width=True):
+    if st.button("Reset", width="stretch"):
         st.session_state["audio_reset"] += 1
         st.session_state.pop("transcript_text", None)
         st.session_state.pop("transcript_display", None)
@@ -162,9 +162,9 @@ def _normalize_orders_for_json(orders: list[dict]) -> list[dict]:
         entry = dict(order)
         datum_value = entry.get("Datum")
         if isinstance(datum_value, datetime):
-            entry["Datum"] = datum_value.date().isoformat()
+            entry["Datum"] = datum_value.replace(microsecond=0).isoformat()
         elif isinstance(datum_value, date):
-            entry["Datum"] = datum_value.isoformat()
+            entry["Datum"] = datetime.combine(datum_value, datetime.min.time()).isoformat()
         normalized.append(entry)
     return normalized
 
@@ -176,7 +176,7 @@ def _orders_for_editor(orders: list[dict]) -> list[dict]:
         datum_value = entry.get("Datum")
         if isinstance(datum_value, str) and datum_value:
             try:
-                entry["Datum"] = date.fromisoformat(datum_value)
+                entry["Datum"] = datetime.fromisoformat(datum_value.replace("Z", "+00:00"))
             except ValueError:
                 entry["Datum"] = None
         prepared.append(entry)
@@ -188,7 +188,7 @@ def _orders_to_editor_df(orders: list[dict]) -> pd.DataFrame:
     if "Datum" not in df.columns:
         df["Datum"] = pd.NaT
     df["Datum"] = df["Datum"].replace("", pd.NA)
-    df["Datum"] = pd.to_datetime(df["Datum"], errors="coerce").dt.date
+    df["Datum"] = pd.to_datetime(df["Datum"], errors="coerce")
     return df
 
 
@@ -197,8 +197,6 @@ def _extract_orders_api(
     model_name: str,
     output_template: dict,
     system_prompt_base: str,
-    allowed_values: dict,
-    field_descriptions: dict,
     default_eintragender: str = "",
 ) -> tuple[dict, dict | None]:
     from openai import OpenAI
@@ -211,61 +209,38 @@ def _extract_orders_api(
         )
 
     client = OpenAI(api_key=api_key)
-    output_structure = output_template or DEFAULT_OUTPUT_SCHEMA
+    output_structure = output_template or default_output_schema()
     system_prompt = build_system_prompt_with_descriptions(
         system_prompt_base,
         output_structure,
-        allowed_values,
-        field_descriptions,
     )
-    user_prompt = (
-        "Transkription:\n"
-        f"{transcript_text}\n\n"
-        "Hinweis: Es kann mehrere Bestellungen geben. "
-        "Wenn Felder fehlen, nutze die Default-Werte aus der Struktur."
-    )
+    user_prompt = build_transcript_user_prompt(transcript_text)
     logger.info("OpenAI extraction request model=%s", model_name)
     logger.info("OpenAI extraction system prompt:\n%s", system_prompt)
     logger.info("OpenAI extraction user prompt:\n%s", user_prompt)
-    response = client.chat.completions.create(
-        model=model_name,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        response_format={"type": "json_object"},
+    tool_schema = get_tools_for_target("orders_v1")
+    logger.info(
+        "OpenAI extraction tool schema:\n%s",
+        json.dumps(tool_schema, ensure_ascii=True, indent=2),
+    )
+    parsed, trace = extract_with_repair(
+        client=client,
+        model_name=model_name,
+        system_prompt=system_prompt,
+        user_content=user_prompt,
+        target_key="orders_v1",
+        context={"default_eintragender": default_eintragender},
+        max_retries=2,
         temperature=0,
     )
-    content = response.choices[0].message.content or "{}"
-    try:
-        parsed = json.loads(content)
-    except json.JSONDecodeError:
-        logger.warning(
-            "OpenAI extraction JSON parse failed; content length=%s",
-            len(content),
-        )
-        # Fallback: handle multiple JSON objects concatenated
-        try:
-            decoder = json.JSONDecoder()
-            first_obj, _ = decoder.raw_decode(content)
-            parsed = first_obj
-        except Exception:
-            logger.error(
-                "OpenAI extraction JSON raw_decode failed; content preview=%s",
-                content[:2000],
-            )
-            parsed = {"orders": [], "notes": "JSON-Parsing fehlgeschlagen", "raw": content}
-
-    if isinstance(parsed, list) and parsed:
-        parsed = parsed[0]
-
-    if default_eintragender:
-        for order in parsed.get("orders", []):
-            if not order.get("Eintragender"):
-                order["Eintragender"] = default_eintragender
 
     if debug:
-        return parsed, {"system": system_prompt, "user": user_prompt}
+        return parsed, {
+            "system": system_prompt,
+            "user": user_prompt,
+            "tools": tool_schema,
+            "trace": trace,
+        }
     return parsed, None
 
 
@@ -283,7 +258,7 @@ def _run_transcription(
         if transcribe_mode == "Lokal (Whisper)":
             transcript_text = _transcribe_audio(tmp_path, local_model)
         else:
-            product_values = DEFAULT_ALLOWED_VALUES.get("Produkt", [])
+            product_values = allowed_product_values()
             if product_values:
                 product_hint = "Produktliste: " + ", ".join(product_values)
                 if api_prompt_text:
@@ -305,8 +280,6 @@ def _run_extraction(
     model_name: str,
     output_template: dict,
     system_prompt_base: str,
-    allowed_values: dict,
-    field_descriptions: dict,
     default_eintragender_value: str,
 ) -> tuple[dict, dict | None]:
     orders_json, prompt_payload = _extract_orders_api(
@@ -314,8 +287,6 @@ def _run_extraction(
         model_name,
         output_template,
         system_prompt_base,
-        allowed_values,
-        field_descriptions,
         default_eintragender=default_eintragender_value,
     )
     return orders_json, prompt_payload
@@ -394,80 +365,30 @@ with st.expander("🧠 Prompt-Konfiguration (Helper)", expanded=False):
         value=prompt_config.get("system_prompt", DEFAULT_SYSTEM_PROMPT),
         height=160,
     )
-    output_schema_input = st.text_area(
-        "Ausgabe-Struktur (JSON)",
-        value=json.dumps(
-            prompt_config.get("output_schema", DEFAULT_OUTPUT_SCHEMA),
-            ensure_ascii=True,
-            indent=2,
-        ),
-        height=220,
-    )
-    allowed_values_input = st.text_area(
-        "Erlaubte Werte (JSON)",
-        value=json.dumps(
-            prompt_config.get("allowed_values", DEFAULT_ALLOWED_VALUES),
-            ensure_ascii=True,
-            indent=2,
-        ),
-        height=160,
-    )
-    field_descriptions_input = st.text_area(
-        "Feld-Erklärungen (JSON)",
-        value=json.dumps(
-            prompt_config.get("field_descriptions", DEFAULT_FIELD_DESCRIPTIONS),
-            ensure_ascii=True,
-            indent=2,
-        ),
-        height=160,
-    )
-
+    st.caption("Ausgabe-Struktur wird zentral ueber Pydantic definiert.")
+    st.json(default_output_schema(default_eintragender))
     if st.button("Prompt-Konfiguration speichern"):
+        new_config = {
+            "system_prompt": system_prompt_input.strip() or DEFAULT_SYSTEM_PROMPT,
+        }
         try:
-            output_schema_value = (
-                json.loads(output_schema_input) if output_schema_input.strip() else {}
-            )
-            allowed_values_value = (
-                json.loads(allowed_values_input) if allowed_values_input.strip() else {}
-            )
-            field_descriptions_value = (
-                json.loads(field_descriptions_input)
-                if field_descriptions_input.strip()
-                else {}
-            )
-        except json.JSONDecodeError as exc:
-            logger.warning("Prompt-Konfiguration JSON invalid: %s", exc)
-            st.error(f"Ungültiges JSON: {exc}")
-        else:
-            new_config = {
-                "system_prompt": system_prompt_input.strip() or DEFAULT_SYSTEM_PROMPT,
-                "output_schema": output_schema_value or DEFAULT_OUTPUT_SCHEMA,
-                "allowed_values": allowed_values_value,
-                "field_descriptions": field_descriptions_value,
-            }
             save_prompt_config(new_config)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Prompt-Konfiguration validierung fehlgeschlagen: %s", exc)
+            st.error(f"Konfiguration ungueltig: {exc}")
+        else:
             st.session_state["order_prompt_config"] = new_config
             st.success("Prompt-Konfiguration gespeichert.")
     if st.button("Prompt-Konfiguration zurücksetzen"):
         default_config = {
             "system_prompt": DEFAULT_SYSTEM_PROMPT,
-            "output_schema": DEFAULT_OUTPUT_SCHEMA,
-            "allowed_values": DEFAULT_ALLOWED_VALUES,
-            "field_descriptions": DEFAULT_FIELD_DESCRIPTIONS,
         }
         save_prompt_config(default_config)
         st.session_state["order_prompt_config"] = default_config
         st.success("Defaults gespeichert. Seite ggf. neu laden.")
 
     base_system_prompt = prompt_config.get("system_prompt", DEFAULT_SYSTEM_PROMPT)
-    allowed_values = prompt_config.get("allowed_values", DEFAULT_ALLOWED_VALUES)
-    field_descriptions = prompt_config.get(
-        "field_descriptions", DEFAULT_FIELD_DESCRIPTIONS
-    )
-    output_template = apply_default_eintragender(
-        prompt_config.get("output_schema", DEFAULT_OUTPUT_SCHEMA),
-        default_eintragender,
-    )
+    output_template = default_output_schema(default_eintragender)
     st.session_state["orders_output_template"] = output_template
 
     extract_model = st.selectbox(
@@ -480,8 +401,8 @@ with st.expander("🧠 Prompt-Konfiguration (Helper)", expanded=False):
 
     st.header("Extraktions Infos:")
     st.json(output_template)
-    st.json(allowed_values or {})
-    st.json(field_descriptions or {})
+    st.json(output_schema_json_schema())
+    st.json(field_descriptions_from_model())
 
 if audio_data is not None and st.button("Transkribieren + extrahieren"):
     with st.spinner("Transkribiere und extrahiere…"):
@@ -502,8 +423,6 @@ if audio_data is not None and st.button("Transkribieren + extrahieren"):
                     extract_model,
                     st.session_state.get("orders_output_template"),
                     base_system_prompt,
-                    allowed_values,
-                    field_descriptions,
                     default_eintragender,
                 )
                 st.session_state["orders_json"] = orders_json

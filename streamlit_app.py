@@ -79,6 +79,13 @@ FEATURE_PAGES = [
         "description": "Order intake and processing tools",
         "icon": "🧾",
     },
+    {
+        "id": "api_image_tester",
+        "path": "pages/7_API_Image_Test.py",
+        "title": "API Image Test",
+        "description": "Upload image and inspect API JSON response",
+        "icon": "🧪",
+    },
 ]
 
 NAV_SECTIONS = [

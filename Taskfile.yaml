@@ -21,6 +21,56 @@ tasks:
       - set -a; source .env; set +a; uv run streamlit run streamlit_app.py
     interactive: true
 
+  api_run:
+    desc: Run FastAPI image API on port 8000
+    deps: [install]
+    cmds:
+      - set -a; source .env; set +a; uv run uvicorn fastapi_app:app --host 0.0.0.0 --port 8000
+    interactive: true
+
+  api_dev:
+    desc: Run FastAPI image API with auto-reload
+    deps: [install]
+    cmds:
+      - set -a; source .env; set +a; uv run uvicorn fastapi_app:app --host 0.0.0.0 --port 8000 --reload
+    interactive: true
+
+  api_health:
+    desc: Check local API health endpoint
+    cmds:
+      - curl -fsS http://localhost:8000/health
+
+  containers_up:
+    desc: Start backend container stack (qdrant + fastapi) for local integration
+    cmds:
+      - docker network inspect neckarwave_net >/dev/null 2>&1 || docker network create neckarwave_net
+      - docker rm -f nw_qdrant >/dev/null 2>&1 || true
+      - docker run --rm -d --name nw_qdrant --network neckarwave_net -p 6333:6333 -p 6334:6334 -v "$(pwd)/qdrant_storage:/qdrant/storage" qdrant/qdrant:latest
+      - task docker_build_fastapi_amd64
+      - docker rm -f nw_fastapi >/dev/null 2>&1 || true
+      - docker run --rm -d --name nw_fastapi --network neckarwave_net --env-file .env -e QDRANT_URL=http://nw_qdrant:6333 -p 8000:8000 ghcr.io/ejmiddle/fastapi-backend:latest
+
+  containers_down:
+    desc: Stop backend container stack (qdrant + fastapi)
+    cmds:
+      - docker stop nw_fastapi >/dev/null 2>&1 || true
+      - docker stop nw_qdrant >/dev/null 2>&1 || true
+
+  containers_ps:
+    desc: Show running project containers
+    cmds:
+      - docker ps --filter "name=nw_fastapi" --filter "name=nw_qdrant"
+
+  containers_logs_fastapi:
+    desc: Follow logs from FastAPI backend container
+    cmds:
+      - docker logs -f nw_fastapi
+
+  containers_logs_qdrant:
+    desc: Follow logs from Qdrant backend container
+    cmds:
+      - docker logs -f nw_qdrant
+
   notion_check:
     desc: Run Notion access check (set NOTION_DATABASE_ID or pass as arg)
     deps: [install]

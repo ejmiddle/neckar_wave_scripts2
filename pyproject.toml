@@ -17,6 +17,11 @@ dependencies = [
     # "openai-whisper",
     "openai",
     "colorlog>=6.10.1",
+    "pydatev>=0.1.0",
+    "fastapi>=0.115.0",
+    "uvicorn>=0.35.0",
+    "python-multipart>=0.0.9",
+    "requests>=2.32.0",
 ]
 requires-python = ">=3.10,<3.13"
 readme = "README.md"

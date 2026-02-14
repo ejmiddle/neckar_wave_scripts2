@@ -137,7 +137,7 @@ if uploaded_files:
     
     if breakdown_data:
         breakdown_df = pd.DataFrame(breakdown_data)
-        st.dataframe(breakdown_df, use_container_width=True)
+        st.dataframe(breakdown_df, width="stretch")
     
 else:
     st.info("ℹ️ No files uploaded yet. Select XLSX files to begin gift card analysis.")

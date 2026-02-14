@@ -180,6 +180,9 @@ def build_order_database_properties() -> Dict[str, Any]:
                 "options": [
                     {"name": "Vor Ort"},
                     {"name": "Online"},
+                    {"name": "Per Rechnung"},
+                    {"name": "Schon bezahlt"},
+                    {"name": "Unklar"},
                 ]
             }
         },
@@ -206,19 +209,27 @@ def _normalize_order_date(value: Any) -> str | None:
     if value is None:
         return None
     if isinstance(value, date) and not isinstance(value, datetime):
-        return value.isoformat()
+        return datetime.combine(value, datetime.min.time()).isoformat()
     if isinstance(value, datetime):
-        return value.date().isoformat()
+        return value.replace(microsecond=0).isoformat()
     if isinstance(value, str):
         cleaned = value.strip()
         if not cleaned:
             return None
+        normalized = cleaned.replace("Z", "+00:00")
         try:
-            return date.fromisoformat(cleaned).isoformat()
+            parsed = datetime.fromisoformat(normalized)
+            return parsed.replace(microsecond=0).isoformat()
         except ValueError:
             pass
         try:
-            return datetime.strptime(cleaned, "%d.%m.%Y").date().isoformat()
+            parsed = datetime.strptime(cleaned, "%d.%m.%Y %H:%M")
+            return parsed.replace(microsecond=0).isoformat()
+        except ValueError:
+            pass
+        try:
+            parsed = datetime.strptime(cleaned, "%d.%m.%Y")
+            return parsed.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
         except ValueError:
             return None
     return None

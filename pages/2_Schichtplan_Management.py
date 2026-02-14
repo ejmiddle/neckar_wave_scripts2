@@ -290,7 +290,7 @@ with st.expander("📝 Mitarbeiter-Info Editor", expanded=False):
     person_info_data = st.data_editor(
         person_info_default,
         num_rows="dynamic",
-        use_container_width=True,
+        width="stretch",
         key="person_info_editor",
         column_config={
             "Name": st.column_config.TextColumn("Name", required=True),
@@ -435,7 +435,7 @@ generation_key = f"{selected_file}_{schichtplan_start_date}_{schichtplan_end_dat
 
 # Generate schichtplan
 if selected_file and schichtplan_start_date and schichtplan_end_date:
-    if st.button("🔄 Generate Schichtplan Export", use_container_width=True):
+    if st.button("🔄 Generate Schichtplan Export", width="stretch"):
         try:
             # Create temp directory for outputs
             temp_dir = SCHICHTPLAN_DATA_DIR / "exports"
@@ -525,7 +525,7 @@ if display_key:
                         data=f,
                         file_name=os.path.basename(path),
                         mime="text/csv",
-                        use_container_width=True,
+                        width="stretch",
                         key=f"download_{label}_{display_key}"  # Unique key for each download button
                     )
             else:
@@ -538,12 +538,12 @@ if display_key:
             try:
                 df = pd.read_csv(path)
                 with st.expander(f"📋 Preview: {label}.csv"):
-                    st.dataframe(df, use_container_width=True)
+                    st.dataframe(df, width="stretch")
             except Exception as e:
                 st.error(f"❌ Could not preview {label}: {e}")
     
     # Option to clear results
-    if st.button("🗑️ Clear Results", use_container_width=True):
+    if st.button("🗑️ Clear Results", width="stretch"):
         # Clear all related session state keys
         keys_to_remove = []
         for key in st.session_state.keys():

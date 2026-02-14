@@ -1,10 +1,39 @@
+# OS / editor files
+.DS_Store
 *.DS_Store
+.vscode/
+
+# Python virtual environments and local tool files
 .venv/
 .python-version
+.pdm-python
+
+# Python caches / build artifacts
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Local runtime and secrets
+.env
+.env.*
+logs/
+*.log
+.task/
+
+# Existing project-specific ignores
 uv.lock
 data
-
-
 guv
 buchhaltungsberichte/output/*
 qdrant_storage

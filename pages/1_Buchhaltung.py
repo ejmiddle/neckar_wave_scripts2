@@ -47,7 +47,7 @@ def run_evaluation(eval_func, func_name: str, date_range: str, location: str):
                         data=f,
                         file_name=f"output_file_{location}_{date_range}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        use_container_width=True
+                        width="stretch"
                     )
         elif func_name == "Gutscheine Evaluation":
             output_file = f"{base_path}/{location}/output_file_zahlungen_{location}_{date_range}.xlsx"
@@ -58,7 +58,7 @@ def run_evaluation(eval_func, func_name: str, date_range: str, location: str):
                         data=f,
                         file_name=f"output_file_zahlungen_{location}_{date_range}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        use_container_width=True
+                        width="stretch"
                     )
                     
     except Exception as e:
@@ -118,11 +118,11 @@ st.header("🚀 Actions")
 col1, col2 = st.columns(2)
 
 with col1:
-    if st.button("📊 Evaluate Location", use_container_width=True):
+    if st.button("📊 Evaluate Location", width="stretch"):
         run_evaluation(eval_location, "Location Evaluation", date_range, location)
 
 with col2:
-    if st.button("🎁 Evaluate Gutscheine", use_container_width=True):
+    if st.button("🎁 Evaluate Gutscheine", width="stretch"):
         run_evaluation(eval_gutscheine_location, "Gutscheine Evaluation", date_range, location)
 
 # Results Display Section
@@ -142,19 +142,19 @@ if os.path.exists(location_eval_file):
             if 'umsatz_mwst' in xls.sheet_names:
                 df_umsatz = pd.read_excel(xls, sheet_name='umsatz_mwst')
                 st.write("**Sales by VAT Rate:**")
-                st.dataframe(df_umsatz, use_container_width=True)
+                st.dataframe(df_umsatz, width="stretch")
             
             # Display Zahlungsart
             if 'zahlungsart' in xls.sheet_names:
                 df_zahlung = pd.read_excel(xls, sheet_name='zahlungsart')
                 st.write("**Payment Methods:**")
-                st.dataframe(df_zahlung, use_container_width=True)
+                st.dataframe(df_zahlung, width="stretch")
             
             # Display Trinkgeld
             if 'Trinkgeld' in xls.sheet_names:
                 df_tips = pd.read_excel(xls, sheet_name='Trinkgeld')
                 st.write("**Total Tips:**")
-                st.dataframe(df_tips, use_container_width=True)
+                st.dataframe(df_tips, width="stretch")
                 
     except Exception as e:
         st.error(f"Error reading location evaluation file: {e}")
@@ -166,7 +166,7 @@ if os.path.exists(gutscheine_eval_file):
         # Read the Excel file
         df_gutscheine = pd.read_excel(gutscheine_eval_file, sheet_name='gutscheine')
         st.write("**Gift Card/Voucher Summary:**")
-        st.dataframe(df_gutscheine, use_container_width=True)
+        st.dataframe(df_gutscheine, width="stretch")
         
     except Exception as e:
         st.error(f"Error reading gutscheine evaluation file: {e}")

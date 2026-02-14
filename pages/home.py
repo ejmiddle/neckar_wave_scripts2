@@ -51,11 +51,11 @@ if pages:
         for col, page_info in zip(cols, chunk):
             label = f"{page_info['icon']} Go to {page_info['title']}"
             with col:
-                if st.button(label, use_container_width=True):
+                if st.button(label, width="stretch"):
                     st.switch_page(page_info["path"])
 
 st.divider()
-if st.button("🧪 Test data mount", use_container_width=True):
+if st.button("🧪 Test data mount", width="stretch"):
     ok, message = _test_data_mount()
     if ok:
         st.success(message)
