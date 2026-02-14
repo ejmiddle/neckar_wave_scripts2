@@ -19,12 +19,29 @@ try:
 except ImportError:  # pragma: no cover
     requests = None
 
-API_URL = "http://localhost:8000/api/v1/images/extract"
+def _resolve_image_extract_url() -> str:
+    base_or_endpoint = os.getenv("API_BASE_URL", "http://localhost:8000").strip()
+    if not base_or_endpoint:
+        base_or_endpoint = "http://localhost:8000"
+
+    if base_or_endpoint.endswith("/api/v1/images/extract"):
+        return base_or_endpoint
+
+    return f"{base_or_endpoint.rstrip('/')}/api/v1/images/extract"
+
+
+API_URL = _resolve_image_extract_url()
 REQUEST_TIMEOUT_SECONDS = 30
 API_BEARER_TOKEN = os.getenv("API_BEARER_TOKEN", "").strip()
+API_TLS_VERIFY_RAW = os.getenv("API_TLS_VERIFY", "true").strip()
 DEFAULT_NOTION_PAGE_ID = "3014e28bdf9e802183d3efda2854f233"
 # Fill this once the database exists, to skip re-creating it.
 HARDCODED_NOTION_DATABASE_ID = "3014e28bdf9e812c93e7e970dd3146b1"
+
+if API_TLS_VERIFY_RAW.lower() in {"false", "0", "no", "off"}:
+    API_TLS_VERIFY: bool | str = False
+else:
+    API_TLS_VERIFY = API_TLS_VERIFY_RAW if API_TLS_VERIFY_RAW not in {"", "true", "1"} else True
 
 
 st.title("🧪 API Image Test")
@@ -40,7 +57,7 @@ eintragender = st.text_input(
 uploaded_file = st.file_uploader(
     "Bild auswaehlen",
     type=["jpg", "jpeg", "png", "heic"],
-    help="Das Bild wird an die lokale API gesendet.",
+    help="Das Bild wird an die konfigurierte API gesendet.",
 )
 
 if requests is None:
@@ -131,6 +148,7 @@ if send_clicked and uploaded_file is not None and requests is not None:
                 files=files,
                 data=data,
                 timeout=REQUEST_TIMEOUT_SECONDS,
+                verify=API_TLS_VERIFY,
             )
         except requests.RequestException as exc:
             logger.exception("API Image Test: request failed request_id=%s", request_id)

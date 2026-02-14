@@ -6,7 +6,7 @@ RUN pip install --no-cache-dir uv
 COPY pyproject.toml /app/pyproject.toml
 COPY uv.lock /app/uv.lock
 # Exclude GPU-heavy deps pulled in by openai-whisper (torch/triton) for a slim image.
-RUN uv sync --frozen --no-dev --no-install-package torch --no-install-package triton
+RUN uv sync --frozen --no-dev --no-install-project --no-install-package torch --no-install-package triton
 
 COPY streamlit_app.py /app/streamlit_app.py
 COPY src /app/src

@@ -1,10 +1,18 @@
 FROM python:3.12-slim
 
 WORKDIR /app
-RUN pip install --no-cache-dir fastapi uvicorn python-multipart
+RUN pip install --no-cache-dir uv
+
+COPY pyproject.toml /app/pyproject.toml
+COPY uv.lock /app/uv.lock
+# Install pinned runtime deps from uv lockfile.
+RUN uv sync --frozen --no-dev --no-install-project --no-install-package torch --no-install-package triton
 
 COPY fastapi_app.py /app/fastapi_app.py
 COPY api /app/api
+COPY src /app/src
+COPY data /app/data
+COPY logging.conf /app/logging.conf
 
 EXPOSE 8000
-CMD ["uvicorn", "fastapi_app:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uv", "run", "uvicorn", "fastapi_app:app", "--host", "0.0.0.0", "--port", "8000"]

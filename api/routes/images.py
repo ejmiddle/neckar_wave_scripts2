@@ -79,3 +79,13 @@ async def extract_from_image(
         content_type=image.content_type or "application/octet-stream",
         metadata=parsed_metadata,
     )
+
+
+@router.get("/extract")
+async def extract_from_image_help() -> dict[str, str]:
+    return {
+        "detail": (
+            "Use POST /api/v1/images/extract with multipart form-data: "
+            "field 'image' (file) and optional field 'metadata' (JSON string)."
+        )
+    }

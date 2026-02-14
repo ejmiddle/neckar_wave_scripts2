@@ -35,10 +35,35 @@ tasks:
       - set -a; source .env; set +a; uv run uvicorn fastapi_app:app --host 0.0.0.0 --port 8000 --reload
     interactive: true
 
+  api_tls_cert:
+    desc: Create local self-signed TLS cert for HTTPS API testing
+    cmds:
+      - mkdir -p certs
+      - openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout certs/localhost-key.pem -out certs/localhost.pem -subj "/CN=localhost"
+
+  api_run_https:
+    desc: Run FastAPI image API over HTTPS on port 8443
+    deps: [install]
+    cmds:
+      - set -a; source .env; set +a; uv run uvicorn fastapi_app:app --host 0.0.0.0 --port 8443 --ssl-keyfile certs/localhost-key.pem --ssl-certfile certs/localhost.pem
+    interactive: true
+
+  api_dev_https:
+    desc: Run FastAPI image API over HTTPS with auto-reload on port 8443
+    deps: [install]
+    cmds:
+      - set -a; source .env; set +a; uv run uvicorn fastapi_app:app --host 0.0.0.0 --port 8443 --reload --ssl-keyfile certs/localhost-key.pem --ssl-certfile certs/localhost.pem
+    interactive: true
+
   api_health:
     desc: Check local API health endpoint
     cmds:
       - curl -fsS http://localhost:8000/health
+
+  api_health_https:
+    desc: Check local HTTPS API health endpoint
+    cmds:
+      - curl -k -fsS https://localhost:8443/health
 
   containers_up:
     desc: Start backend container stack (qdrant + fastapi) for local integration
@@ -143,6 +168,17 @@ tasks:
     desc: Push FastAPI backend image to GHCR
     cmds:
       - docker push ghcr.io/ejmiddle/fastapi-backend:latest
+
+  docker_publish_fastapi:
+    desc: Build then push FastAPI backend image to GHCR
+    cmds:
+      - task docker_build_fastapi_amd64
+      - task docker_push_fastapi
+
+  api_run_publish:
+    desc: Build then push image for api_run deployment
+    cmds:
+      - task docker_publish_fastapi
 
   docker_run_fastapi:
     desc: Run the FastAPI backend container locally for testing
