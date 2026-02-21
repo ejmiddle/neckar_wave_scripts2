@@ -184,7 +184,7 @@ tasks:
     desc: Run the FastAPI backend container locally for testing
     deps: [docker_build_fastapi_amd64]
     cmds:
-      - docker run --rm --platform linux/amd64 -p 8000:8000 ghcr.io/ejmiddle/fastapi-backend:latest
+      - docker run --rm --platform linux/amd64 --env-file .env -p 8000:8000 ghcr.io/ejmiddle/fastapi-backend:latest
     interactive: true
 
 

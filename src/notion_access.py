@@ -205,6 +205,40 @@ def create_order_database(
     return notion_request("POST", "/databases", token, payload)
 
 
+def get_database_schema(database_id: str) -> Dict[str, Any]:
+    token = os.getenv("NOTION_TOKEN")
+    if not token:
+        raise RuntimeError("Missing NOTION_TOKEN in environment or .env")
+
+    payload = notion_request("GET", f"/databases/{database_id}", token)
+    properties = payload.get("properties", {})
+
+    schema_rows: List[Dict[str, Any]] = []
+    for name, prop in properties.items():
+        ptype = prop.get("type", "unknown")
+        row: Dict[str, Any] = {"name": name, "type": ptype}
+
+        if ptype in {"select", "status", "multi_select"}:
+            container = prop.get(ptype) or {}
+            options = container.get("options") or []
+            row["options"] = [option.get("name") for option in options if option.get("name")]
+        elif ptype == "title":
+            row["options"] = []
+        else:
+            row["options"] = []
+
+        schema_rows.append(row)
+
+    schema_rows.sort(key=lambda item: item["name"].lower())
+    title = extract_plain_text(payload.get("title"))
+    return {
+        "database_id": payload.get("id") or database_id,
+        "database_title": title,
+        "property_count": len(schema_rows),
+        "properties": schema_rows,
+    }
+
+
 def _normalize_order_date(value: Any) -> str | None:
     if value is None:
         return None

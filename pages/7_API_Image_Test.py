@@ -11,6 +11,7 @@ from src.notion_access import (
     DEFAULT_ORDER_DB_TITLE,
     build_order_database_properties,
     create_order_database,
+    get_database_schema,
     insert_orders,
 )
 
@@ -111,6 +112,19 @@ def _orders_to_rows(orders: list[dict], columns: list[str]) -> list[dict[str, st
             row[column] = "" if value is None else str(value)
         rows.append(row)
     return rows
+
+
+def _expected_order_fields() -> list[str]:
+    return [
+        "Produkt",
+        "Menge",
+        "Datum",
+        "Notiz/Kunde",
+        "Abgeholt",
+        "Eintragender",
+        "Wohin",
+        "Zahlung",
+    ]
 
 
 if send_clicked and uploaded_file is not None and requests is not None:
@@ -266,6 +280,65 @@ if isinstance(current_response, dict):
     if notion_db_id:
         st.caption(f"Aktive Notion Database ID: `{notion_db_id}`")
 
+    cached_schema = st.session_state.get("api_test_notion_schema")
+    if isinstance(cached_schema, dict) and cached_schema.get("database_id") != notion_db_id:
+        st.session_state.pop("api_test_notion_schema", None)
+
+    if st.button("Notion-Schema prüfen"):
+        if not notion_db_id:
+            st.error("Keine Notion-Datenbank-ID gesetzt.")
+        else:
+            with st.spinner("Lade Notion-Schema..."):
+                try:
+                    schema = get_database_schema(notion_db_id)
+                    st.session_state["api_test_notion_schema"] = schema
+                    logger.info(
+                        "API Image Test: notion schema loaded db_id=%s title=%s property_count=%s",
+                        schema.get("database_id"),
+                        schema.get("database_title"),
+                        schema.get("property_count"),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.exception(
+                        "API Image Test: notion schema lookup failed db_id=%s",
+                        notion_db_id,
+                    )
+                    st.error(f"Schema-Lookup fehlgeschlagen: {exc}")
+
+    schema_data = st.session_state.get("api_test_notion_schema")
+    if isinstance(schema_data, dict):
+        with st.expander("Notion DB Schema (Debug)", expanded=False):
+            st.write(
+                {
+                    "database_id": schema_data.get("database_id"),
+                    "database_title": schema_data.get("database_title"),
+                    "property_count": schema_data.get("property_count"),
+                }
+            )
+            properties = schema_data.get("properties", [])
+            if properties:
+                schema_df = pd.DataFrame(properties)
+                if "options" in schema_df.columns:
+                    schema_df["options"] = schema_df["options"].apply(
+                        lambda values: ", ".join(values) if isinstance(values, list) else ""
+                    )
+                st.dataframe(schema_df, width="stretch")
+
+                property_names = {
+                    str(item.get("name"))
+                    for item in properties
+                    if isinstance(item, dict) and item.get("name")
+                }
+                expected_fields = set(_expected_order_fields())
+                missing_fields = sorted(expected_fields - property_names)
+                if missing_fields:
+                    st.warning(
+                        "Diese erwarteten Order-Felder fehlen im aktiven Notion-Schema: "
+                        + ", ".join(missing_fields)
+                    )
+                else:
+                    st.success("Das aktive Notion-Schema enthaelt alle erwarteten Order-Felder.")
+
     if dev_mode:
         default_title = f"{DEFAULT_ORDER_DB_TITLE} {date.today().strftime('%d.%m.%Y')}"
         db_title = st.text_input(
@@ -301,6 +374,12 @@ if isinstance(current_response, dict):
         else:
             with st.spinner("Schreibe Bestellungen nach Notion..."):
                 try:
+                    logger.info(
+                        "API Image Test: saving orders to notion db_id=%s order_count=%s first_order_keys=%s",
+                        notion_db_id,
+                        len(orders),
+                        sorted(list(orders[0].keys())) if orders else [],
+                    )
                     count = insert_orders(notion_db_id, orders)
                     st.success(f"{count} Bestellungen gespeichert.")
                 except Exception as exc:  # noqa: BLE001

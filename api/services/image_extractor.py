@@ -2,6 +2,7 @@ import base64
 import json
 import os
 from copy import deepcopy
+from time import perf_counter
 
 from openai import OpenAI
 
@@ -88,10 +89,21 @@ def extract_orders_from_image(
     content_type: str,
     metadata: dict,
 ) -> ImageExtractResponse:
-    _ = metadata
+    started_at = perf_counter()
     model_name = get_image_extraction_model()
 
     default_eintragender = str(metadata.get("default_eintragender", "")).strip()
+    metadata_keys = sorted([str(key) for key in metadata.keys()])
+    logger.info(
+        "Image extraction start request_id=%s model=%s content_type=%s image_bytes=%s metadata_keys=%s has_default_eintragender=%s",
+        request_id,
+        model_name,
+        content_type,
+        len(image_bytes),
+        metadata_keys,
+        bool(default_eintragender),
+    )
+
     prompt_config = load_prompt_config()
     output_template = default_output_schema(default_eintragender)
     system_prompt_base = prompt_config.get("system_prompt", "")
@@ -100,28 +112,50 @@ def extract_orders_from_image(
         output_template,
     )
     user_prompt = build_image_user_prompt()
-    logger.info("Image extraction request_id=%s model=%s", request_id, model_name)
-    logger.info("Image extraction system prompt:\n%s", system_prompt)
-    logger.info("Image extraction user prompt:\n%s", user_prompt)
+    tools = get_tools_for_target("orders_v1")
     logger.info(
-        "Image extraction tool schema:\n%s",
-        json.dumps(get_tools_for_target("orders_v1"), ensure_ascii=True, indent=2),
+        "Image extraction prompt ready request_id=%s system_prompt_chars=%s user_prompt_chars=%s tool_count=%s",
+        request_id,
+        len(system_prompt),
+        len(user_prompt),
+        len(tools),
     )
 
     api_key = os.getenv("OPENAI_API_KEY", "").strip()
     if not api_key:
-        return _build_dummy_response(
+        logger.warning(
+            "Image extraction request_id=%s: OPENAI_API_KEY missing, returning dummy response.",
+            request_id,
+        )
+        dummy = _build_dummy_response(
             request_id=request_id,
             default_eintragender=default_eintragender,
             warning="OPENAI_API_KEY fehlt, dummy response verwendet.",
             output_template=output_template,
             model_version=model_name,
         )
+        logger.info(
+            "Image extraction done request_id=%s model=%s used_dummy=%s orders=%s columns=%s warnings=%s duration_ms=%s",
+            request_id,
+            model_name,
+            True,
+            len(dummy.orders),
+            len(dummy.columns),
+            len(dummy.warnings),
+            round((perf_counter() - started_at) * 1000, 1),
+        )
+        return dummy
 
     try:
         client = OpenAI(api_key=api_key)
         image_base64 = base64.b64encode(image_bytes).decode("ascii")
         image_url = f"data:{content_type};base64,{image_base64}"
+        logger.info(
+            "Image extraction OpenAI call request_id=%s model=%s image_base64_chars=%s",
+            request_id,
+            model_name,
+            len(image_base64),
+        )
 
         parsed, trace = extract_with_repair(
             client=client,
@@ -136,15 +170,36 @@ def extract_orders_from_image(
             max_retries=2,
             temperature=0,
         )
-        logger.info("Image extraction repair trace request_id=%s trace=%s", request_id, trace)
+        logger.info(
+            "Image extraction OpenAI result request_id=%s attempts=%s normalization=%s",
+            request_id,
+            trace.get("attempts"),
+            trace.get("normalization"),
+        )
     except Exception as exc:  # noqa: BLE001
-        return _build_dummy_response(
+        logger.exception(
+            "Image extraction request_id=%s: OpenAI extraction failed (%s), returning dummy response.",
+            request_id,
+            exc.__class__.__name__,
+        )
+        dummy = _build_dummy_response(
             request_id=request_id,
             default_eintragender=default_eintragender,
             warning=f"OpenAI extraction failed ({exc.__class__.__name__}), dummy response verwendet.",
             output_template=output_template,
             model_version=model_name,
         )
+        logger.info(
+            "Image extraction done request_id=%s model=%s used_dummy=%s orders=%s columns=%s warnings=%s duration_ms=%s",
+            request_id,
+            model_name,
+            True,
+            len(dummy.orders),
+            len(dummy.columns),
+            len(dummy.warnings),
+            round((perf_counter() - started_at) * 1000, 1),
+        )
+        return dummy
 
     columns = order_field_names()
     orders = parsed.get("orders", [])
@@ -161,9 +216,23 @@ def extract_orders_from_image(
             output_template=output_template,
             model_version=model_name,
         )
+        logger.warning(
+            "Image extraction request_id=%s: no orders extracted, returning dummy response.",
+            request_id,
+        )
+        logger.info(
+            "Image extraction done request_id=%s model=%s used_dummy=%s orders=%s columns=%s warnings=%s duration_ms=%s",
+            request_id,
+            model_name,
+            True,
+            len(dummy.orders),
+            len(dummy.columns),
+            len(dummy.warnings),
+            round((perf_counter() - started_at) * 1000, 1),
+        )
         return dummy
 
-    return ImageExtractResponse(
+    response = ImageExtractResponse(
         request_id=request_id,
         status="ok",
         columns=columns,
@@ -172,3 +241,14 @@ def extract_orders_from_image(
         warnings=warnings,
         model_version=model_name,
     )
+    logger.info(
+        "Image extraction done request_id=%s model=%s used_dummy=%s orders=%s columns=%s warnings=%s duration_ms=%s",
+        request_id,
+        model_name,
+        False,
+        len(response.orders),
+        len(response.columns),
+        len(response.warnings),
+        round((perf_counter() - started_at) * 1000, 1),
+    )
+    return response

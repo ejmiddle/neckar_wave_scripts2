@@ -11,8 +11,8 @@ RUN uv sync --frozen --no-dev --no-install-project --no-install-package torch --
 COPY fastapi_app.py /app/fastapi_app.py
 COPY api /app/api
 COPY src /app/src
-COPY data /app/data
+COPY .env /app/.env
 COPY logging.conf /app/logging.conf
 
 EXPOSE 8000
-CMD ["uv", "run", "uvicorn", "fastapi_app:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "set -a; [ -f /app/.env ] && . /app/.env; set +a; exec uv run uvicorn fastapi_app:app --host 0.0.0.0 --port 8000"]

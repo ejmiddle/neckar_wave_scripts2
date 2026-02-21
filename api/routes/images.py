@@ -1,5 +1,6 @@
 import json
 import uuid
+from time import perf_counter
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile, status
 from fastapi.concurrency import run_in_threadpool
@@ -8,6 +9,7 @@ from api.core.config import settings
 from api.deps.security import verify_bearer_token
 from api.models.image_extract import ImageExtractResponse
 from api.services.image_extractor import extract_orders_from_image
+from src.logging_config import logger
 
 router = APIRouter(prefix="/api/v1/images", tags=["images"])
 
@@ -38,13 +40,16 @@ async def extract_from_image(
     x_request_id: str | None = Header(default=None),
     _: None = Depends(verify_bearer_token),
 ) -> ImageExtractResponse:
+    started_at = perf_counter()
     if image.content_type not in ALLOWED_MIME_TYPES:
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             detail=f"Unsupported media type: {image.content_type}",
         )
 
+    read_started_at = perf_counter()
     content = await image.read()
+    read_duration_ms = round((perf_counter() - read_started_at) * 1000, 1)
     if not content:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Image is empty.")
     if len(content) > settings.max_image_bytes:
@@ -72,13 +77,26 @@ async def extract_from_image(
         )
 
     request_id = x_request_id or str(uuid.uuid4())
-    return await run_in_threadpool(
+    logger.info(
+        "Image extract request accepted request_id=%s content_type=%s image_bytes=%s read_ms=%s",
+        request_id,
+        image.content_type,
+        len(content),
+        read_duration_ms,
+    )
+    response = await run_in_threadpool(
         extract_orders_from_image,
         request_id=request_id,
         image_bytes=content,
         content_type=image.content_type or "application/octet-stream",
         metadata=parsed_metadata,
     )
+    logger.info(
+        "Image extract request finished request_id=%s total_ms=%s",
+        request_id,
+        round((perf_counter() - started_at) * 1000, 1),
+    )
+    return response
 
 
 @router.get("/extract")
