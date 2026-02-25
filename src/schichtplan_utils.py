@@ -1,12 +1,17 @@
-import pandas as pd
-import re
-from datetime import datetime, timedelta, time
 import difflib
-import os
+import re
+from datetime import datetime, time, timedelta
+from pathlib import Path
+
+import pandas as pd
+
+NAME_COLUMN_CANDIDATES = ("Name", "Mitarbeiter", "Employee", "Person", "Titel")
+SPAN_COLUMN_CANDIDATES = ("Wann?", "Wann", "Date", "Zeitraum", "Zeitspanne")
 
 def parse_wann(wann_str):
     if pd.isna(wann_str):
         return pd.NaT, pd.NaT
+    wann_str = str(wann_str)
     parts = wann_str.split("→")
     start = parts[0].strip()
     end = parts[1].strip() if len(parts) > 1 else None
@@ -19,6 +24,8 @@ def parse_wann(wann_str):
     end_time = pd.NaT
     if end:
         if re.match(r"^\d{1,2}:\d{2}", end):
+            if pd.isna(start_time):
+                return start_time, pd.NaT
             end = f"{start_time.strftime('%B %d, %Y')} {end}"
         else:
             end = re.sub(r'\s*\(GMT[^\)]*\)', '', end)
@@ -130,92 +137,162 @@ def transform_to_schedule_format(df, person_info):
     final_df = df_copy[output_columns]
     return final_df
 
-def generate_schichtplan(csv_file_path, start_date, end_date, person_info, fixed_schedules=None, output_dir="Schichtplan"):
+def _select_best_column(df: pd.DataFrame, candidates: tuple[str, ...]) -> str | None:
+    best_col = None
+    best_count = -1
+    for col in candidates:
+        if col not in df.columns:
+            continue
+        values = df[col].dropna().astype(str).str.strip()
+        non_empty = (values != "").sum()
+        if non_empty > best_count:
+            best_col = col
+            best_count = int(non_empty)
+    return best_col
+
+
+def _prepare_availability_dataframe(availability_data):
+    if not isinstance(availability_data, pd.DataFrame):
+        raise TypeError("availability_data must be a pandas DataFrame.")
+    df = availability_data.copy()
+    if df.empty:
+        raise ValueError("availability_data is empty.")
+
+    name_col = _select_best_column(df, NAME_COLUMN_CANDIDATES)
+    if not name_col:
+        raise ValueError("availability_data must contain a name column (e.g. Name).")
+    if name_col != "Name":
+        df = df.rename(columns={name_col: "Name"})
+
+    has_start_end = "Start Time" in df.columns and "End Time" in df.columns
+    if has_start_end:
+        df["Start Time"] = pd.to_datetime(df["Start Time"], dayfirst=True, errors="coerce")
+        df["End Time"] = pd.to_datetime(df["End Time"], dayfirst=True, errors="coerce")
+    else:
+        span_col = _select_best_column(df, SPAN_COLUMN_CANDIDATES)
+        if not span_col:
+            raise ValueError(
+                "availability_data must contain either 'Start Time'/'End Time' "
+                "or a timespan column like 'Wann?'."
+            )
+        df[["Start Time", "End Time"]] = df[span_col].apply(lambda x: pd.Series(parse_wann(x)))
+
+    df = df[df["Start Time"].notna()].copy()
+    df = split_multiday_entries(df)
+    df = fill_missing_end_times(df)
+    df = df[df["Name"].notna()].copy()
+    df["Name"] = df["Name"].astype(str).str.strip()
+    df = df[df["Name"] != ""]
+
+    return df
+
+
+def _filter_by_date_range(df: pd.DataFrame, start_date, end_date) -> pd.DataFrame:
+    start_dt = pd.to_datetime(start_date).normalize()
+    end_dt = pd.to_datetime(end_date).normalize() + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+
+    if end_dt < start_dt:
+        raise ValueError("end_date must be on or after start_date.")
+
+    in_range = (df["Start Time"] <= end_dt) & (df["End Time"] >= start_dt)
+    return df[in_range].copy()
+
+
+def _write_output_files(formatted_df: pd.DataFrame, output_dir):
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    output_files = {}
+    export_path = output_path / "schedule_export.csv"
+    formatted_df.to_csv(export_path, index=False)
+    output_files["export"] = str(export_path)
+
+    df_alt = formatted_df[formatted_df["Location"] == "ALT"]
+    df_wie = formatted_df[formatted_df["Location"] == "WIE"]
+    df_bak = formatted_df[formatted_df["Location"] == "BAK"]
+    df_both_locations = pd.concat([df_alt, df_wie], ignore_index=True)
+
+    both_path = output_path / "both_locations.csv"
+    df_both_locations.to_csv(both_path, index=False)
+    output_files["both"] = str(both_path)
+
+    alt_path = output_path / "schedule_ALT.csv"
+    df_alt.to_csv(alt_path, index=False)
+    output_files["alt"] = str(alt_path)
+
+    wie_path = output_path / "schedule_WIE.csv"
+    df_wie.to_csv(wie_path, index=False)
+    output_files["wie"] = str(wie_path)
+
+    bak_path = output_path / "schedule_BAK.csv"
+    df_bak.to_csv(bak_path, index=False)
+    output_files["bak"] = str(bak_path)
+
+    return output_files
+
+
+def generate_schichtplan(availability_data, start_date, end_date, person_info, fixed_schedules=None, output_dir="Schichtplan"):
     """
     Generate schichtplan and return output files along with name evaluation analysis.
     
     Returns:
         tuple: (output_files_dict, evaluation_dict)
     """
-    # Load and process the CSV
-    df = pd.read_csv(csv_file_path)
-    
-    # Store original unique names for evaluation
-    original_unique_names = df['Name'].dropna().str.strip().unique()
-    
-    # Parse times and process data
-    df[['Start Time', 'End Time']] = df['Wann?'].apply(lambda x: pd.Series(parse_wann(x)))
-    df = split_multiday_entries(df)
-    df = fill_missing_end_times(df)
-    df = df[df['Name'].notna()]
-    df['Name'] = df['Name'].str.strip()
-    
+    # Load and process in-memory availability_data.
+    df = _prepare_availability_dataframe(availability_data)
+    df = _filter_by_date_range(df, start_date, end_date)
+
+    # Store names from selected time window for evaluation.
+    original_unique_names = df["Name"].dropna().str.strip().unique()
+
     # Create name lists for matching
     name_list = [name for name, _, _ in person_info]
     person_info_names = set(name_list)
-    
+
     # Match names and filter
-    df['new_name'] = df['Name'].apply(lambda n: match_name(n, name_list))
-    df = df[df['new_name'].notna()]
+    df["new_name"] = df["Name"].apply(lambda n: match_name(n, name_list))
+    matched_names = set(df["new_name"].dropna().unique())
+    df = df[df["new_name"].notna()]
     df = normalize_long_shifts(df)
 
     # Add fixed schedules if provided
     if fixed_schedules:
         fixed_df = generate_fixed_schedule_entries(start_date, end_date, fixed_schedules)
         df = pd.concat([df, fixed_df], ignore_index=True)
-    
+
+    if not df.empty:
+        df = df.sort_values(["Start Time", "new_name"]).reset_index(drop=True)
+
     # Transform to final format
     formatted_df = transform_to_schedule_format(df, person_info)
-    
-    # Create output directory
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # Write output files
-    output_files = {}
-    formatted_df.to_csv(os.path.join(output_dir, "schedule_export.csv"), index=False)
-    output_files['export'] = os.path.join(output_dir, "schedule_export.csv")
-    
-    df_alt = formatted_df[formatted_df['Location'] == 'ALT']
-    df_wie = formatted_df[formatted_df['Location'] == 'WIE']
-    df_bak = formatted_df[formatted_df['Location'] == 'BAK']
-    df_both_locations = pd.concat([df_alt, df_wie], ignore_index=True)
-    
-    df_both_locations.to_csv(os.path.join(output_dir, "both_locations.csv"), index=False)
-    output_files['both'] = os.path.join(output_dir, "both_locations.csv")
-    
-    df_alt.to_csv(os.path.join(output_dir, "schedule_ALT.csv"), index=False)
-    output_files['alt'] = os.path.join(output_dir, "schedule_ALT.csv")
-    
-    df_wie.to_csv(os.path.join(output_dir, "schedule_WIE.csv"), index=False)
-    output_files['wie'] = os.path.join(output_dir, "schedule_WIE.csv")
 
-    df_bak.to_csv(os.path.join(output_dir, "schedule_BAK.csv"), index=False)
-    output_files['bak'] = os.path.join(output_dir, "schedule_BAK.csv")
-    
+    # Write output files
+    output_files = _write_output_files(formatted_df, output_dir)
+
     # Perform name evaluation analysis
     unique_names_set = set(original_unique_names)
-    
+
     # Names in uploaded CSV but not in person_info (potential typos or missing employees)
     names_not_in_person_info = unique_names_set - person_info_names
-    
+
     # Names in person_info but not in uploaded CSV (employees not scheduled)
     names_not_in_csv = person_info_names - unique_names_set
-    
-    # Names that were successfully matched
-    matched_names = set(df['new_name'].dropna().unique())
-    
+
     # Names that couldn't be matched (too different from person_info)
-    unmatched_names = unique_names_set - {name for name in original_unique_names 
-                                        if match_name(name, name_list) is not None}
-    
-    evaluation = {
-        'names_in_csv_not_in_person_info': sorted(list(names_not_in_person_info)),
-        'names_in_person_info_not_in_csv': sorted(list(names_not_in_csv)),
-        'successfully_matched_names': sorted(list(matched_names)),
-        'unmatched_names': sorted(list(unmatched_names)),
-        'total_original_names': len(original_unique_names),
-        'total_person_info_names': len(person_info_names),
-        'total_matched': len(matched_names)
+    unmatched_names = unique_names_set - {
+        name for name in original_unique_names if match_name(name, name_list) is not None
     }
-    
-    return output_files, evaluation 
+
+    evaluation = {
+        "names_in_csv_not_in_person_info": sorted(list(names_not_in_person_info)),
+        "names_in_person_info_not_in_csv": sorted(list(names_not_in_csv)),
+        "names_in_availability_not_in_person_info": sorted(list(names_not_in_person_info)),
+        "names_in_person_info_not_in_availability": sorted(list(names_not_in_csv)),
+        "successfully_matched_names": sorted(list(matched_names)),
+        "unmatched_names": sorted(list(unmatched_names)),
+        "total_original_names": len(original_unique_names),
+        "total_person_info_names": len(person_info_names),
+        "total_matched": len(matched_names),
+    }
+
+    return output_files, evaluation
