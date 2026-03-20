@@ -80,6 +80,13 @@ FEATURE_PAGES = [
         "icon": "🧾",
     },
     {
+        "id": "lieferscheine",
+        "path": "pages/5_Lieferscheine.py",
+        "title": "Lieferscheine",
+        "description": "Lieferscheine erfassen und verarbeiten",
+        "icon": "🧾",
+    },
+    {
         "id": "api_image_tester",
         "path": "pages/7_API_Image_Test.py",
         "title": "API Image Test",

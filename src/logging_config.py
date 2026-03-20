@@ -5,7 +5,11 @@ from pathlib import Path
 
 def _configure_logging() -> None:
     log_conf_path = Path(__file__).resolve().parent.parent / "logging.conf"
-    log_dir = Path(__file__).resolve().parent.parent / "logs"
+    data_log_dir = Path(__file__).resolve().parent.parent / "data" / "logs"
+    fallback_log_dir = Path(__file__).resolve().parent.parent / "logs"
+    log_dir = data_log_dir if data_log_dir.exists() else fallback_log_dir
+    if not log_dir.exists():
+        log_dir = data_log_dir
     log_dir.mkdir(parents=True, exist_ok=True)
 
     if log_conf_path.exists():

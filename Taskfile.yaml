@@ -96,33 +96,6 @@ tasks:
     cmds:
       - docker logs -f nw_qdrant
 
-  notion_check:
-    desc: Run Notion access check (set NOTION_DATABASE_ID or pass as arg)
-    deps: [install]
-    cmds:
-      - set -a; source .env; set +a; uv run python scripts/check_notion_access.py {{.DATABASE_ID}} {{.CLI_ARGS}}
-    vars:
-      DATABASE_ID: '{{.DATABASE_ID | default ""}}'
-      CLI_ARGS: '{{.CLI_ARGS | default ""}}'
-
-  notion_copy:
-    desc: Copy a Notion database schema into the same parent (set NOTION_DATABASE_ID or pass as arg)
-    deps: [install]
-    cmds:
-      - set -a; source .env; set +a; uv run python scripts/check_notion_access.py {{.DATABASE_ID}} --copy {{.CLI_ARGS}}
-    vars:
-      DATABASE_ID: '{{.DATABASE_ID | default ""}}'
-      CLI_ARGS: '{{.CLI_ARGS | default ""}}'
-
-  notion_copy_rows:
-    desc: Copy a Notion database schema + rows into the same parent (set NOTION_DATABASE_ID or pass as arg)
-    deps: [install]
-    cmds:
-      - set -a; source .env; set +a; uv run python scripts/check_notion_access.py {{.DATABASE_ID}} --copy --copy-rows {{.CLI_ARGS}}
-    vars:
-      DATABASE_ID: '{{.DATABASE_ID | default ""}}'
-      CLI_ARGS: '{{.CLI_ARGS | default ""}}'
-
   ping_test_internet:
     desc: Run the internet ping test script
     deps: [install]
@@ -135,39 +108,107 @@ tasks:
     cmds:
       - uv run python scripts/ping_test_internet.py plot
 
+  sevdesk_latest_belege:
+    desc: Show the 10 latest sevDesk Belege (Voucher)
+    deps: [install]
+    cmds:
+      - set -a; source .env; set +a; uv run python -m src.sevdesk latest --limit 10
+
+  sevdesk_accounting_types:
+    desc: Show sevDesk accounting types (IDs for Beleg input)
+    deps: [install]
+    cmds:
+      - set -a; source .env; set +a; uv run python -m src.sevdesk accounting-types --limit {{.LIMIT}} {{.CLI_ARGS}}
+    vars:
+      LIMIT: '{{.LIMIT | default "100"}}'
+      CLI_ARGS: '{{.CLI_ARGS | default ""}}'
+
+  sevdesk_export_master_data:
+    desc: Export essential sevDesk master data (buchunggskonten + zahlungskonten) to JSON
+    deps: [install]
+    cmds:
+      - set -a; source .env; set +a; uv run python -m src.sevdesk export-buchunggskonten --output {{.BUCHUNGGSKONTEN_OUTPUT}} {{.CLI_ARGS}}
+      - set -a; source .env; set +a; uv run python -m src.sevdesk export-zahlungskonten --output {{.ZAHLUNGSKONTEN_OUTPUT}} {{.CLI_ARGS}}
+    vars:
+      BUCHUNGGSKONTEN_OUTPUT: '{{.BUCHUNGGSKONTEN_OUTPUT | default "data/sevdesk/informationen/buchunggskonten.json"}}'
+      ZAHLUNGSKONTEN_OUTPUT: '{{.ZAHLUNGSKONTEN_OUTPUT | default "data/sevdesk/informationen/zahlungskonten.json"}}'
+      CLI_ARGS: '{{.CLI_ARGS | default ""}}'
+
+  sevdesk_create_beleg_template:
+    desc: Create a complete dummy JSON input template for sevDesk Beleg creation
+    deps: [install]
+    cmds:
+      - uv run python -m src.sevdesk template --output {{.OUTPUT}}
+    vars:
+      OUTPUT: '{{.OUTPUT | default "data/sevdesk/beleg_create_input.example.json"}}'
+
+  sevdesk_beleg_umbuchen:
+    desc: Check latest Belege, identify matching one from template description, then update that Beleg to APITEST Zahlungskonto
+    deps: [install]
+    cmds:
+      - uv run python -m src.sevdesk template --input-template {{.INPUT}} --output {{.INPUT}} --zahlungskonten-file {{.ZAHLUNGSKONTEN_FILE}} --buchunggskonten-file {{.BUCHUNGGSKONTEN_FILE}} --check-account-name "{{.CHECK_ACCOUNT_NAME}}" --accounting-type-name-contains "{{.ACCOUNTING_TYPE_NAME}}"
+      - set -a; source .env; set +a; if [ "{{.APPLY}}" = "1" ]; then uv run python -m src.sevdesk assign-from-latest --input {{.INPUT}} --latest-limit {{.LATEST_LIMIT}} --zahlungskonten-file {{.ZAHLUNGSKONTEN_FILE}} --buchunggskonten-file {{.BUCHUNGGSKONTEN_FILE}} --check-account-name "{{.CHECK_ACCOUNT_NAME}}" --accounting-type-name-contains "{{.ACCOUNTING_TYPE_NAME}}" {{.ASSIGN_ARGS}}; else uv run python -m src.sevdesk assign-from-latest --input {{.INPUT}} --latest-limit {{.LATEST_LIMIT}} --zahlungskonten-file {{.ZAHLUNGSKONTEN_FILE}} --buchunggskonten-file {{.BUCHUNGGSKONTEN_FILE}} --check-account-name "{{.CHECK_ACCOUNT_NAME}}" --accounting-type-name-contains "{{.ACCOUNTING_TYPE_NAME}}" --dry-run {{.ASSIGN_ARGS}}; fi
+    vars:
+      INPUT: '{{.INPUT | default "data/sevdesk/beleg_create_input.apitest_verrechnungskonto.json"}}'
+      LATEST_LIMIT: '{{.LATEST_LIMIT | default "25"}}'
+      ZAHLUNGSKONTEN_FILE: '{{.ZAHLUNGSKONTEN_FILE | default "data/sevdesk/informationen/zahlungskonten.json"}}'
+      BUCHUNGGSKONTEN_FILE: '{{.BUCHUNGGSKONTEN_FILE | default "data/sevdesk/informationen/buchunggskonten.json"}}'
+      CHECK_ACCOUNT_NAME: '{{.CHECK_ACCOUNT_NAME | default "APITEST"}}'
+      ACCOUNTING_TYPE_NAME: '{{.ACCOUNTING_TYPE_NAME | default ""}}'
+      APPLY: '{{.APPLY | default "0"}}'
+      ASSIGN_ARGS: '{{.ASSIGN_ARGS | default ""}}'
+
+  sevdesk_create_beleg_dry_run:
+    desc: Validate and print Beleg creation payload from JSON input (no API write)
+    deps: [install]
+    cmds:
+      - set -a; source .env; set +a; uv run python -m src.sevdesk create --input {{.INPUT}} --dry-run
+    vars:
+      INPUT: '{{.INPUT | default "data/sevdesk/beleg_create_input.example.json"}}'
+
+  sevdesk_create_beleg:
+    desc: Create a new sevDesk Beleg from JSON input file
+    deps: [install]
+    cmds:
+      - set -a; source .env; set +a; uv run python -m src.sevdesk create --input {{.INPUT}}
+    vars:
+      INPUT: '{{.INPUT | default "data/sevdesk/beleg_create_input.example.json"}}'
+
   clean:
     desc: Clean cache and temporary files
     cmds:
       - find . -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
 
   docker_build_app:
-    desc: Build amd64 image for mittwald
+    desc: Build fresh amd64 app image with current code and dependencies
     cmds:
-      - docker buildx build --platform linux/amd64 -t ghcr.io/ejmiddle/streamlit-hello:latest --load -f Dockerfile .
+      - sh -c 'if [ "${DOCKER_BUILD_REGISTRY_CACHE:-0}" = "1" ]; then docker buildx build --platform linux/amd64 --pull --cache-from type=registry,ref=ghcr.io/ejmiddle/streamlit-hello:buildcache --cache-to type=registry,ref=ghcr.io/ejmiddle/streamlit-hello:buildcache,mode=max -t ghcr.io/ejmiddle/streamlit-hello:latest --load -f Dockerfile .; else docker buildx build --platform linux/amd64 --pull -t ghcr.io/ejmiddle/streamlit-hello:latest --load -f Dockerfile .; fi'
       - echo "docker images ghcr.io/ejmiddle/streamlit-hello:latest"
 
   docker_push_app:
-    desc: Push image to GHCR
+    desc: Push image and build cache to GHCR
     cmds:
       - docker push ghcr.io/ejmiddle/streamlit-hello:latest
+      - sh -c 'if [ "${DOCKER_BUILD_REGISTRY_CACHE:-0}" = "1" ]; then docker push ghcr.io/ejmiddle/streamlit-hello:buildcache; fi'
       - echo "Tip-> source .env && echo \"$GHCR_TOKEN\" | docker login ghcr.io -u ejmiddle --password-stdin"
 
   docker_run_app:
-    desc: Run the app container locally for testing
+    desc: Run app container with live local source mounts
     deps: [docker_build_app]
     cmds:
-      - docker run --rm --platform linux/amd64 -p 8501:8501 -v "$(pwd)/data:/app/data" ghcr.io/ejmiddle/streamlit-hello:latest
+      - docker run --rm --platform linux/amd64 --env-file .env -p 8501:8501 -v "$(pwd)/data:/app/data" -v "$(pwd)/src:/app/src" -v "$(pwd)/pages:/app/pages" -v "$(pwd)/streamlit_app.py:/app/streamlit_app.py:ro" -v "$(pwd)/.streamlit:/app/.streamlit:ro" -v "$(pwd)/logging.conf:/app/logging.conf:ro" ghcr.io/ejmiddle/streamlit-hello:latest
     interactive: true
 
   docker_build_fastapi_amd64:
     desc: Build amd64 FastAPI backend image
     cmds:
-      - docker buildx build --platform linux/amd64 -t ghcr.io/ejmiddle/fastapi-backend:latest --load -f Dockerfile.fastapi .
+      - sh -c 'if [ "${DOCKER_BUILD_REGISTRY_CACHE:-0}" = "1" ]; then docker buildx build --platform linux/amd64 --cache-from type=registry,ref=ghcr.io/ejmiddle/fastapi-backend:buildcache --cache-to type=registry,ref=ghcr.io/ejmiddle/fastapi-backend:buildcache,mode=max -t ghcr.io/ejmiddle/fastapi-backend:latest --load -f Dockerfile.fastapi .; else docker buildx build --platform linux/amd64 -t ghcr.io/ejmiddle/fastapi-backend:latest --load -f Dockerfile.fastapi .; fi'
 
   docker_push_fastapi:
-    desc: Push FastAPI backend image to GHCR
+    desc: Push FastAPI backend image and build cache to GHCR
     cmds:
       - docker push ghcr.io/ejmiddle/fastapi-backend:latest
+      - sh -c 'if [ "${DOCKER_BUILD_REGISTRY_CACHE:-0}" = "1" ]; then docker push ghcr.io/ejmiddle/fastapi-backend:buildcache; fi'
 
   docker_publish_fastapi:
     desc: Build then push FastAPI backend image to GHCR

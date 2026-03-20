@@ -7,6 +7,10 @@ from typing import Any, Callable
 from openai import OpenAI
 from pydantic import BaseModel, ValidationError
 
+from src.liefernscheine_prompt_config import (
+    LieferscheinePayload,
+    validate_lieferscheine_payload_with_report,
+)
 from src.order_prompt_config import OrdersPayload, validate_orders_payload_with_report
 
 
@@ -44,6 +48,14 @@ def _normalize_orders(
     )
 
 
+def _normalize_lieferscheine(
+    payload: dict[str, Any],
+    context: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    del context
+    return validate_lieferscheine_payload_with_report(payload)
+
+
 EXTRACTION_TARGETS: dict[str, ExtractionTarget] = {
     "orders_v1": ExtractionTarget(
         key="orders_v1",
@@ -52,6 +64,14 @@ EXTRACTION_TARGETS: dict[str, ExtractionTarget] = {
         description="Extract bakery orders from text/image into the orders payload schema.",
         model=OrdersPayload,
         normalize=_normalize_orders,
+    ),
+    "lieferscheine_v1": ExtractionTarget(
+        key="lieferscheine_v1",
+        pattern=PATTERN_TOOL_CALL_REPAIR,
+        function_name="extract_lieferscheine_v1",
+        description="Extract delivery note lines from text/image into the Lieferscheine payload schema.",
+        model=LieferscheinePayload,
+        normalize=_normalize_lieferscheine,
     ),
     # Placeholder for future structures:
     # "customers_v1": ExtractionTarget(...),

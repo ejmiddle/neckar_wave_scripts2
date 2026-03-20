@@ -158,11 +158,8 @@ def _prepare_availability_dataframe(availability_data):
     if df.empty:
         raise ValueError("availability_data is empty.")
 
-    name_col = _select_best_column(df, NAME_COLUMN_CANDIDATES)
-    if not name_col:
-        raise ValueError("availability_data must contain a name column (e.g. Name).")
-    if name_col != "Name":
-        df = df.rename(columns={name_col: "Name"})
+    if "Name" not in df.columns:
+        raise ValueError("availability_data must contain a 'Name' column.")
 
     has_start_end = "Start Time" in df.columns and "End Time" in df.columns
     if has_start_end:

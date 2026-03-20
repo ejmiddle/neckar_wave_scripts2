@@ -1,12 +1,13 @@
+# syntax=docker/dockerfile:1.5
 FROM python:3.12-slim
 
 WORKDIR /app
-RUN pip install --no-cache-dir uv
+RUN --mount=type=cache,target=/root/.cache/uv pip install --no-cache-dir uv
 
 COPY pyproject.toml /app/pyproject.toml
 COPY uv.lock /app/uv.lock
 # Install pinned runtime deps from uv lockfile.
-RUN uv sync --frozen --no-dev --no-install-project --no-install-package torch --no-install-package triton
+RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev --no-install-project --no-install-package torch --no-install-package triton
 
 COPY fastapi_app.py /app/fastapi_app.py
 COPY api /app/api

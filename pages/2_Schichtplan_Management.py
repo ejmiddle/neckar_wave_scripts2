@@ -1,7 +1,9 @@
 import datetime
+import io
 import logging
 import os
 import re
+import shutil
 from urllib.parse import parse_qs, urlparse
 
 import pandas as pd
@@ -15,7 +17,10 @@ from src.schichtplan_utils import generate_schichtplan
 st.title("👥 Schichtplan Management")
 logger = logging.getLogger(__name__)
 
+PERSON_INFO_CSV_PATH = SCHICHTPLAN_DATA_DIR / "mitarbeiter_info.csv"
 PERSON_INFO_EXCEL_PATH = SCHICHTPLAN_DATA_DIR / "mitarbeiter_info.xlsx"
+PERSON_INFO_BACKUP_DIR = SCHICHTPLAN_DATA_DIR / "backups"
+PERSON_INFO_COLUMNS = ["Name", "Location", "Task"]
 
 # Fixed schedules configuration (weekly recurring shifts)
 FIXED_SCHEDULES = {
@@ -42,44 +47,151 @@ FIXED_SCHEDULES = {
 }
 
 
-def load_person_info_from_excel():
-    """Load person info from Excel file. No internal defaults are used."""
-    if os.path.exists(PERSON_INFO_EXCEL_PATH):
-        try:
-            logger.info("Loading Mitarbeiter-Info from Excel: %s", PERSON_INFO_EXCEL_PATH)
-            df = pd.read_excel(PERSON_INFO_EXCEL_PATH)
-            required_cols = ["Name", "Location", "Task"]
-            if not set(required_cols).issubset(df.columns):
-                logger.warning(
-                    "Mitarbeiter-Info missing required columns. found=%s required=%s",
-                    list(df.columns),
-                    required_cols,
-                )
-                st.warning(
-                    f"Die Datei `{PERSON_INFO_EXCEL_PATH}` enthält nicht die erwarteten Spalten "
-                    f"`{', '.join(required_cols)}`. Bitte passe die Excel-Datei entsprechend an."
-                )
-                return []
+def _normalize_person_info_df(df: pd.DataFrame) -> pd.DataFrame:
+    for col in PERSON_INFO_COLUMNS:
+        if col not in df.columns:
+            df[col] = ""
+    df = df[PERSON_INFO_COLUMNS].copy()
 
-            # Keep only the relevant columns and drop completely empty rows
-            df = df[required_cols].dropna(how="all")
-            logger.info("Loaded %d Mitarbeiter-Info rows from Excel", len(df))
-            return df.to_dict(orient="records")
-        except Exception as e:
-            logger.exception("Failed to load Mitarbeiter-Info from Excel")
-            st.error(
-                f"Fehler beim Laden der Mitarbeiter-Info aus `{PERSON_INFO_EXCEL_PATH}`: {e}. "
-                "Bitte prüfe die Datei und lade die Seite neu."
+    for col in PERSON_INFO_COLUMNS:
+        df[col] = df[col].fillna("").astype(str).str.strip()
+
+    return df[(df["Name"] != "") | (df["Location"] != "") | (df["Task"] != "")]
+
+
+def _bootstrap_person_info_csv_from_excel_if_needed() -> bool:
+    """One-time migration path: create CSV from existing Excel if CSV is missing."""
+    if PERSON_INFO_CSV_PATH.exists() or not PERSON_INFO_EXCEL_PATH.exists():
+        return False
+
+    try:
+        df = pd.read_excel(PERSON_INFO_EXCEL_PATH)
+        if not set(PERSON_INFO_COLUMNS).issubset(df.columns):
+            logger.warning(
+                "Excel bootstrap skipped: missing required columns. found=%s required=%s",
+                list(df.columns),
+                PERSON_INFO_COLUMNS,
             )
-            return []
-    else:
-        logger.error("Mitarbeiter-Info Excel file not found: %s", PERSON_INFO_EXCEL_PATH)
-        st.error(
-            f"Die Datei für die Mitarbeiter-Info `{PERSON_INFO_EXCEL_PATH}` wurde nicht gefunden. "
-            "Bitte lege diese Excel-Datei mit den Spalten `Name`, `Location`, `Task` an "
-            "und lade die Seite anschließend neu."
+            return False
+
+        normalized = _normalize_person_info_df(df)
+        normalized.to_csv(PERSON_INFO_CSV_PATH, index=False)
+        logger.info(
+            "Bootstrapped person info CSV from Excel: %s -> %s rows=%d",
+            PERSON_INFO_EXCEL_PATH,
+            PERSON_INFO_CSV_PATH,
+            len(normalized),
+        )
+        st.info(
+            f"ℹ️ Mitarbeiter-Info wurde einmalig von `{PERSON_INFO_EXCEL_PATH}` nach "
+            f"`{PERSON_INFO_CSV_PATH}` migriert."
+        )
+        return True
+    except Exception:
+        logger.exception("Failed bootstrapping CSV from Excel")
+        return False
+
+
+def ensure_session_person_info_backup():
+    """Create one timestamped backup once per Streamlit session."""
+    backup_state_key = "person_info_backup_path"
+    if backup_state_key in st.session_state:
+        return
+
+    st.session_state[backup_state_key] = ""
+    if not PERSON_INFO_CSV_PATH.exists():
+        return
+
+    try:
+        os.makedirs(PERSON_INFO_BACKUP_DIR, exist_ok=True)
+        timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        backup_path = PERSON_INFO_BACKUP_DIR / f"mitarbeiter_info.backup-{timestamp}.csv"
+        shutil.copyfile(PERSON_INFO_CSV_PATH, backup_path)
+        st.session_state[backup_state_key] = str(backup_path)
+        logger.info("Created session backup for person info: %s", backup_path)
+    except Exception:
+        logger.exception("Failed to create session backup for person info")
+
+
+def load_person_info_from_csv():
+    """Load person info from CSV single source of truth."""
+    _bootstrap_person_info_csv_from_excel_if_needed()
+    ensure_session_person_info_backup()
+
+    if not PERSON_INFO_CSV_PATH.exists():
+        logger.warning("Person info CSV missing: %s", PERSON_INFO_CSV_PATH)
+        st.warning(
+            f"Die Datei `{PERSON_INFO_CSV_PATH}` wurde nicht gefunden. "
+            "Lege sie mit den Spalten `Name`, `Location`, `Task` an oder speichere im Editor."
         )
         return []
+
+    try:
+        logger.info("Loading Mitarbeiter-Info from CSV: %s", PERSON_INFO_CSV_PATH)
+        df = pd.read_csv(PERSON_INFO_CSV_PATH, dtype=str).fillna("")
+        normalized = _normalize_person_info_df(df)
+        logger.info("Loaded %d Mitarbeiter-Info rows from CSV", len(normalized))
+        return normalized.to_dict(orient="records")
+    except Exception as e:
+        logger.exception("Failed to load Mitarbeiter-Info from CSV")
+        st.error(
+            f"Fehler beim Laden der Mitarbeiter-Info aus `{PERSON_INFO_CSV_PATH}`: {e}. "
+            "Bitte prüfe die Datei und lade die Seite neu."
+        )
+        return []
+
+
+def save_person_info_to_csv(person_rows) -> tuple[bool, str]:
+    """Validate and save editor rows to the CSV single source of truth."""
+    if isinstance(person_rows, pd.DataFrame):
+        rows = person_rows.to_dict(orient="records")
+    elif isinstance(person_rows, list):
+        rows = person_rows
+    else:
+        return False, "Ungültiges Datenformat im Editor."
+
+    cleaned_rows = []
+    seen_names = set()
+    duplicate_names = set()
+    incomplete_rows = 0
+
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("Name") or "").strip()
+        location = str(row.get("Location") or "").strip()
+        task = str(row.get("Task") or "").strip()
+
+        # Ignore fully empty editor rows.
+        if not name and not location and not task:
+            continue
+
+        if not name or not location or not task:
+            incomplete_rows += 1
+            continue
+
+        key = name.casefold()
+        if key in seen_names:
+            duplicate_names.add(name)
+            continue
+        seen_names.add(key)
+
+        cleaned_rows.append({"Name": name, "Location": location, "Task": task})
+
+    if incomplete_rows > 0:
+        return False, "Es gibt unvollständige Zeilen. Bitte Name, Location und Task überall ausfüllen."
+    if duplicate_names:
+        duplicates = ", ".join(sorted(duplicate_names))
+        return False, f"Doppelte Namen gefunden: {duplicates}. Bitte bereinigen."
+
+    try:
+        os.makedirs(SCHICHTPLAN_DATA_DIR, exist_ok=True)
+        pd.DataFrame(cleaned_rows, columns=PERSON_INFO_COLUMNS).to_csv(PERSON_INFO_CSV_PATH, index=False)
+        logger.info("Saved %d person info rows to CSV: %s", len(cleaned_rows), PERSON_INFO_CSV_PATH)
+        return True, f"Mitarbeiter-Info gespeichert ({len(cleaned_rows)} Zeilen)."
+    except Exception as e:
+        logger.exception("Failed to save person info CSV")
+        return False, f"Fehler beim Speichern: {e}"
 
 
 def extract_notion_database_id(database_ref: str) -> str | None:
@@ -121,6 +233,42 @@ def extract_notion_database_id(database_ref: str) -> str | None:
     return None
 
 
+def _format_notion_date_value_for_wann(value: str | None) -> str | None:
+    """Format a Notion date value to match local CSV-style 'Wann?' strings."""
+    raw = (value or "").strip()
+    if not raw:
+        return None
+
+    has_time_component = "T" in raw
+    normalized = raw.replace("Z", "+00:00")
+    try:
+        parsed = datetime.datetime.fromisoformat(normalized)
+    except ValueError:
+        # Keep unknown inputs as-is so downstream parsing still has a chance.
+        return raw
+
+    # Keep wall-clock times from Notion and avoid mixing aware/naive datetimes later.
+    if parsed.tzinfo is not None:
+        parsed = parsed.replace(tzinfo=None)
+
+    if has_time_component:
+        return parsed.strftime("%B %d, %Y %H:%M")
+    return parsed.strftime("%B %d, %Y")
+
+
+def _notion_date_to_wann_span(date_prop: dict | None) -> str | None:
+    """Convert Notion date payload into a 'start → end' timespan string."""
+    if not isinstance(date_prop, dict):
+        return None
+
+    start = _format_notion_date_value_for_wann(date_prop.get("start"))
+    if not start:
+        return None
+
+    end = _format_notion_date_value_for_wann(date_prop.get("end"))
+    return f"{start} → {end}" if end else start
+
+
 def fetch_person_info_from_notion(database_ref: str):
     """Fetch person info rows from Notion and return normalized and raw rows."""
     logger.info("Fetching Mitarbeiter-Info from Notion")
@@ -150,7 +298,16 @@ def fetch_person_info_from_notion(database_ref: str):
     people = []
     raw_rows = []
     for row in rows:
-        flat = flatten_properties(row.get("properties", {}))
+        properties = row.get("properties", {})
+        flat = flatten_properties(properties)
+
+        # Normalize Notion date properties to the same span format as local CSV exports.
+        for key, prop in properties.items():
+            if isinstance(prop, dict) and prop.get("type") == "date":
+                span = _notion_date_to_wann_span(prop.get("date"))
+                if span:
+                    flat[key] = span
+
         raw_rows.append(flat)
 
         name_candidates = [
@@ -276,15 +433,6 @@ def get_next_month_dates():
     
     return first_day_next_month, last_day_next_month
 
-def get_available_schichtplan_files():
-    """Get list of available schichtplan files from the availabilities folder."""
-    availabilities_dir = SCHICHTPLAN_DATA_DIR / "availabilities"
-    if not os.path.exists(availabilities_dir):
-        return []
-    
-    csv_files = [f for f in os.listdir(availabilities_dir) if f.endswith(".csv")]
-    return sorted(csv_files)
-
 def save_uploaded_file(uploaded_file):
     """Save uploaded file to availabilities folder with its original name."""
     if uploaded_file is None:
@@ -371,24 +519,13 @@ def quick_format_validation_from_dataframe(df: pd.DataFrame):
 
 
 def extract_name_values(df: pd.DataFrame):
-    """Return the best available name column and cleaned name values."""
-    name_candidates = ["Name", "Mitarbeiter", "Employee", "Person", "Titel"]
-    best_col = None
-    best_values = pd.Series(dtype="object")
-    best_count = -1
+    """Return cleaned name values from the strict `Name` column only."""
+    if "Name" not in df.columns:
+        return None, pd.Series(dtype="object")
 
-    for col in name_candidates:
-        if col not in df.columns:
-            continue
-        values = df[col].dropna().astype(str).str.strip()
-        values = values[values != ""]
-        count = len(values)
-        if count > best_count:
-            best_col = col
-            best_values = values
-            best_count = count
-
-    return best_col, best_values
+    values = df["Name"].dropna().astype(str).str.strip()
+    values = values[values != ""]
+    return "Name", values
 
 
 def perform_availability_evaluation_from_dataframe(df, person_info, source_label: str = "availability_data"):
@@ -404,7 +541,7 @@ def perform_availability_evaluation_from_dataframe(df, person_info, source_label
         name_col, name_values = extract_name_values(df)
         if not name_col:
             logger.warning("Evaluation aborted: no supported name column in %s", source_label)
-            return {"error": "Data must contain one of: Name, Mitarbeiter, Employee, Person"}
+            return {"error": "Data must contain the column: Name"}
         logger.info(
             "Using name column '%s' for evaluation source=%s non_empty_names=%d",
             name_col,
@@ -523,14 +660,11 @@ if "notion_availability_url" not in st.session_state:
     st.session_state["notion_availability_url"] = ""
 if "last_saved_upload_signature" not in st.session_state:
     st.session_state["last_saved_upload_signature"] = ""
-if "last_logged_selected_availability_file" not in st.session_state:
-    st.session_state["last_logged_selected_availability_file"] = ""
 
 
 st.subheader("1) Availability-Datenquelle")
 source_col1, source_col2 = st.columns([1, 2])
 uploaded_file = None
-selected_file = None
 with source_col1:
     selected_source = st.radio(
         "Datenquelle",
@@ -562,7 +696,7 @@ with source_col2:
                 logger.exception("Unexpected error while loading availability data from Notion.")
                 st.error(f"❌ Fehler beim Laden aus Notion: {e}")
     else:
-        st.caption("CSV mit Verfügbarkeiten hochladen oder bereits gespeicherte Datei auswählen.")
+        st.caption("CSV mit Verfügbarkeiten hochladen.")
         uploaded_file = st.file_uploader(
             "📁 Upload CSV with Availability",
             type=["csv"],
@@ -578,23 +712,6 @@ if uploaded_file is not None:
             st.session_state["last_saved_upload_signature"] = upload_signature
             st.success(f"✅ Datei '{uploaded_file.name}' wurde gespeichert.")
 
-if selected_source == "Lokal (CSV)":
-    available_files = get_available_schichtplan_files()
-    if available_files:
-        selected_file = st.selectbox(
-            "📂 Verfügbarkeitsdatei auswählen",
-            options=available_files,
-            key="selected_availability_file",
-            help="Choose from available CSV files with availability data",
-        )
-        if st.session_state.get("last_logged_selected_availability_file") != selected_file:
-            logger.info("Availability file selected: %s", selected_file)
-            st.session_state["last_logged_selected_availability_file"] = selected_file
-    else:
-        st.warning("Keine Verfügbarkeitsdateien gefunden. Bitte zuerst eine CSV hochladen.")
-else:
-    selected_file = None
-
 # Central availability_data used for consistency checks.
 availability_data = None
 availability_data_source = ""
@@ -608,18 +725,13 @@ if selected_source == "Notion":
         availability_data = pd.DataFrame(normalized_notion_data)
         availability_data_source = "Notion (normalisiert)"
 else:
-    if selected_file:
-        selected_file_path = SCHICHTPLAN_DATA_DIR / "availabilities" / selected_file
-        if os.path.exists(selected_file_path):
-            try:
-                availability_data = pd.read_csv(selected_file_path)
-                availability_data_source = f"Lokal/Datei: {selected_file}"
-            except Exception:
-                logger.exception("Failed reading selected availability file: %s", selected_file_path)
-                st.error(f"❌ Fehler beim Laden der Verfügbarkeitsdatei: {selected_file}")
-        else:
-            logger.error("Selected availability file does not exist: %s", selected_file_path)
-            st.error(f"❌ Verfügbarkeitsdatei nicht gefunden: {selected_file}")
+    if uploaded_file is not None:
+        try:
+            availability_data = pd.read_csv(io.BytesIO(uploaded_file.getvalue()))
+            availability_data_source = f"Lokal/Upload: {uploaded_file.name}"
+        except Exception:
+            logger.exception("Failed reading uploaded availability file: %s", uploaded_file.name)
+            st.error(f"❌ Fehler beim Laden der hochgeladenen Verfügbarkeitsdatei: {uploaded_file.name}")
 
 has_availability_data = availability_data is not None and not availability_data.empty
 
@@ -633,24 +745,23 @@ with st.expander("👀 Availability-Datenvorschau", expanded=True):
     else:
         st.caption("Noch keine availability_data geladen.")
 
-st.subheader("2) Mitarbeiter-Info (Excel)")
-person_info_default = load_person_info_from_excel()
+st.subheader("2) Mitarbeiter-Info (CSV Single Source)")
+person_info_default = load_person_info_from_csv()
+person_info_default_df = pd.DataFrame(person_info_default, columns=PERSON_INFO_COLUMNS)
 with st.expander("📝 Mitarbeiter-Info Editor", expanded=True):
     st.markdown(
         "Bearbeite die Liste der Mitarbeiter:innen, deren Location und Aufgabe. "
-        "Die Stammdaten werden aus der Excel-Datei "
-        f"`{PERSON_INFO_EXCEL_PATH}` eingelesen. "
-        "**Dauerhafte Anpassungen solltest du direkt in dieser Excel-Datei vornehmen "
-        "und anschließend die Seite neu laden.**"
+        "Die Stammdaten werden aus der CSV-Datei "
+        f"`{PERSON_INFO_CSV_PATH}` geladen."
     )
-
+    backup_path = st.session_state.get("person_info_backup_path")
+    if backup_path:
+        st.caption(f"Session-Backup erstellt: `{backup_path}`")
     st.caption(
-        "Hinweis: Änderungen in der Tabelle gelten nur für die aktuelle Sitzung. "
-        "Die eigentlichen Stammdaten kommen aus der Excel-Datei "
-        f"`{PERSON_INFO_EXCEL_PATH}`."
+        "Änderungen im Editor werden erst mit 'Mitarbeiter-Info speichern' dauerhaft in der CSV gespeichert."
     )
     person_info_data = st.data_editor(
-        person_info_default,
+        person_info_default_df,
         num_rows="dynamic",
         width="stretch",
         key="person_info_editor",
@@ -669,6 +780,20 @@ with st.expander("📝 Mitarbeiter-Info Editor", expanded=True):
         }
     )
     st.caption(f"Aktuelle person_info Zeilen: {len(person_info_data)}")
+    action_col1, action_col2 = st.columns(2)
+    with action_col1:
+        if st.button("💾 Mitarbeiter-Info speichern", width="stretch", key="save_person_info_csv"):
+            success, message = save_person_info_to_csv(person_info_data)
+            if success:
+                st.success(f"✅ {message}")
+                st.rerun()
+            else:
+                st.error(f"❌ {message}")
+    with action_col2:
+        if st.button("🔄 Aus CSV neu laden", width="stretch", key="reload_person_info_csv"):
+            if "person_info_editor" in st.session_state:
+                del st.session_state["person_info_editor"]
+            st.rerun()
 
 person_info = to_person_info_tuples(person_info_data, require_full=False)
 person_info_for_generation = to_person_info_tuples(person_info_data, require_full=True)
@@ -682,16 +807,25 @@ if availability_data_source:
 if not has_availability_data:
     st.info("Keine availability_data verfügbar. Bitte im Schritt 1 Daten laden.")
 if not has_person_info:
-    st.info("Keine gültige Mitarbeiter-Info verfügbar. Bitte `mitarbeiter_info.xlsx` prüfen.")
+    st.info("Keine gültige Mitarbeiter-Info verfügbar. Bitte `mitarbeiter_info.csv` prüfen.")
 
-evaluation_for_selected = None
-if has_availability_data and has_person_info:
+current_evaluation_key = f"{availability_data_source}::{len(availability_data) if has_availability_data else 0}::{len(person_info)}"
+if st.session_state.get("evaluation_cache_key") != current_evaluation_key:
+    st.session_state["evaluation_cache_key"] = current_evaluation_key
+    st.session_state["evaluation_for_selected"] = None
+
+evaluation_for_selected = st.session_state.get("evaluation_for_selected")
+can_run_consistency_check = has_availability_data and has_person_info
+
+if st.button("🔍 Konsistenzprüfung ausführen", key="run_consistency_check", disabled=not can_run_consistency_check):
     with st.spinner("Prüfe Datenkonsistenz ..."):
         evaluation_for_selected = perform_availability_evaluation_from_dataframe(
             availability_data,
             person_info,
             source_label=availability_data_source or "availability_data",
         )
+    st.session_state["evaluation_for_selected"] = evaluation_for_selected
+
     if "error" in evaluation_for_selected:
         logger.error(
             "Consistency check failed: source=%s error=%s",
@@ -708,6 +842,9 @@ if has_availability_data and has_person_info:
                 else 0
             ),
         )
+
+if evaluation_for_selected is None:
+    st.caption("Klicke auf `Konsistenzprüfung ausführen`, um das Prüfergebnis zu berechnen.")
 
 if evaluation_for_selected:
     st.markdown("#### Prüfergebnis")
