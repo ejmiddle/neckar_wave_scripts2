@@ -45,6 +45,13 @@ PRIMARY_PAGE = {
 
 FEATURE_PAGES = [
     {
+        "id": "accounting",
+        "path": "pages/8_Accounting.py",
+        "title": "Accounting",
+        "description": "sevDesk voucher and accounting type lookups",
+        "icon": "🧮",
+    },
+    {
         "id": "buchhaltung",
         "path": "pages/1_Buchhaltung.py",
         "title": "Buchhaltung",

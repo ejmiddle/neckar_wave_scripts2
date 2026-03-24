@@ -108,21 +108,6 @@ tasks:
     cmds:
       - uv run python scripts/ping_test_internet.py plot
 
-  sevdesk_latest_belege:
-    desc: Show the 10 latest sevDesk Belege (Voucher)
-    deps: [install]
-    cmds:
-      - set -a; source .env; set +a; uv run python -m src.sevdesk latest --limit 10
-
-  sevdesk_accounting_types:
-    desc: Show sevDesk accounting types (IDs for Beleg input)
-    deps: [install]
-    cmds:
-      - set -a; source .env; set +a; uv run python -m src.sevdesk accounting-types --limit {{.LIMIT}} {{.CLI_ARGS}}
-    vars:
-      LIMIT: '{{.LIMIT | default "100"}}'
-      CLI_ARGS: '{{.CLI_ARGS | default ""}}'
-
   sevdesk_export_master_data:
     desc: Export essential sevDesk master data (buchunggskonten + zahlungskonten) to JSON
     deps: [install]

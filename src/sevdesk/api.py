@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import mimetypes
 import os
+from pathlib import Path
 from typing import Any
 
 import requests
@@ -29,6 +31,14 @@ def sevdesk_headers(token: str) -> dict[str, str]:
         "Authorization": token,
         "Accept": "application/json",
         "Content-Type": "application/json",
+        "User-Agent": "neckarwave_scripts/sevdesk_belege",
+    }
+
+
+def sevdesk_multipart_headers(token: str) -> dict[str, str]:
+    return {
+        "Authorization": token,
+        "Accept": "application/json",
         "User-Agent": "neckarwave_scripts/sevdesk_belege",
     }
 
@@ -138,6 +148,78 @@ def request_check_accounts(
     return [item for item in objects if isinstance(item, dict)]
 
 
+def request_tax_rules(
+    base_url: str,
+    token: str,
+    limit: int,
+    offset: int,
+    sort: str,
+) -> list[dict[str, Any]]:
+    payload = sevdesk_request(
+        "GET",
+        base_url,
+        token,
+        "/TaxRule",
+        params={
+            "limit": max(1, limit),
+            "offset": max(0, offset),
+            "sort": sort,
+        },
+    )
+    objects = payload.get("objects", [])
+    if not isinstance(objects, list):
+        return []
+    return [item for item in objects if isinstance(item, dict)]
+
+
+def request_contacts(
+    base_url: str,
+    token: str,
+    limit: int,
+    offset: int,
+    sort: str,
+) -> list[dict[str, Any]]:
+    payload = sevdesk_request(
+        "GET",
+        base_url,
+        token,
+        "/Contact",
+        params={
+            "limit": max(1, limit),
+            "offset": max(0, offset),
+            "sort": sort,
+        },
+    )
+    objects = payload.get("objects", [])
+    if not isinstance(objects, list):
+        return []
+    return [item for item in objects if isinstance(item, dict)]
+
+
+def request_check_account_transactions(
+    base_url: str,
+    token: str,
+    limit: int,
+    offset: int,
+    sort: str,
+) -> list[dict[str, Any]]:
+    payload = sevdesk_request(
+        "GET",
+        base_url,
+        token,
+        "/CheckAccountTransaction",
+        params={
+            "limit": max(1, limit),
+            "offset": max(0, offset),
+            "sort": sort,
+        },
+    )
+    objects = payload.get("objects", [])
+    if not isinstance(objects, list):
+        return []
+    return [item for item in objects if isinstance(item, dict)]
+
+
 def fetch_all_accounting_types(
     base_url: str,
     token: str,
@@ -182,6 +264,132 @@ def fetch_all_check_accounts(
     return rows
 
 
+def fetch_all_tax_rules(
+    base_url: str,
+    token: str,
+    page_size: int,
+    sort: str = "id",
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    offset = 0
+    effective_page_size = min(1000, max(1, page_size))
+
+    while True:
+        page = request_tax_rules(base_url, token, effective_page_size, offset, sort)
+        if not page:
+            break
+        rows.extend(page)
+        if len(page) < effective_page_size:
+            break
+        offset += len(page)
+
+    return rows
+
+
+def fetch_all_contacts(
+    base_url: str,
+    token: str,
+    page_size: int,
+    sort: str = "id",
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    offset = 0
+    effective_page_size = min(1000, max(1, page_size))
+
+    while True:
+        page = request_contacts(base_url, token, effective_page_size, offset, sort)
+        if not page:
+            break
+        rows.extend(page)
+        if len(page) < effective_page_size:
+            break
+        offset += len(page)
+
+    return rows
+
+
+def fetch_latest_transactions_for_check_account(
+    base_url: str,
+    token: str,
+    check_account_id: str,
+    wanted_rows: int,
+    *,
+    page_size: int = 200,
+    sort: str = "-valueDate",
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    offset = 0
+    target_count = max(1, wanted_rows)
+    effective_page_size = min(1000, max(1, page_size))
+    wanted_account_id = str(check_account_id).strip()
+
+    while len(rows) < target_count:
+        page = request_check_account_transactions(base_url, token, effective_page_size, offset, sort)
+        if not page:
+            break
+
+        for item in page:
+            account = item.get("checkAccount")
+            if not isinstance(account, dict):
+                continue
+            if str(account.get("id", "")).strip() != wanted_account_id:
+                continue
+            item_id = str(item.get("id", "")).strip()
+            if item_id and item_id in seen_ids:
+                continue
+            if item_id:
+                seen_ids.add(item_id)
+            rows.append(item)
+            if len(rows) >= target_count:
+                break
+
+        if len(page) < effective_page_size:
+            break
+        offset += len(page)
+
+    return rows[:target_count]
+
+
+def fetch_all_transactions_for_check_account(
+    base_url: str,
+    token: str,
+    check_account_id: str,
+    *,
+    page_size: int = 200,
+    sort: str = "-valueDate",
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    offset = 0
+    effective_page_size = min(1000, max(1, page_size))
+    wanted_account_id = str(check_account_id).strip()
+
+    while True:
+        page = request_check_account_transactions(base_url, token, effective_page_size, offset, sort)
+        if not page:
+            break
+
+        for item in page:
+            account = item.get("checkAccount")
+            if not isinstance(account, dict):
+                continue
+            if str(account.get("id", "")).strip() != wanted_account_id:
+                continue
+            item_id = str(item.get("id", "")).strip()
+            if item_id and item_id in seen_ids:
+                continue
+            if item_id:
+                seen_ids.add(item_id)
+            rows.append(item)
+
+        if len(page) < effective_page_size:
+            break
+        offset += len(page)
+
+    return rows
+
+
 def create_voucher(base_url: str, token: str, payload: dict[str, Any]) -> dict[str, Any]:
     return sevdesk_request(
         "POST",
@@ -190,6 +398,59 @@ def create_voucher(base_url: str, token: str, payload: dict[str, Any]) -> dict[s
         "/Voucher/Factory/saveVoucher",
         payload=payload,
     )
+
+
+def create_contact(base_url: str, token: str, payload: dict[str, Any]) -> dict[str, Any]:
+    return sevdesk_request(
+        "POST",
+        base_url,
+        token,
+        "/Contact",
+        payload=payload,
+    )
+
+
+def upload_voucher_temp_file(base_url: str, token: str, file_path: str | Path) -> str:
+    path = Path(file_path)
+    if not path.exists():
+        raise RuntimeError(f"Voucher upload file not found: {path}")
+    if not path.is_file():
+        raise RuntimeError(f"Voucher upload path is not a file: {path}")
+
+    guessed_content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    url = f"{base_url.rstrip('/')}/Voucher/Factory/uploadTempFile"
+    with path.open("rb") as handle:
+        response = requests.post(
+            url,
+            headers=sevdesk_multipart_headers(token),
+            files={
+                "file": (
+                    path.name,
+                    handle,
+                    guessed_content_type,
+                )
+            },
+            timeout=60,
+        )
+
+    if not response.ok:
+        raise RuntimeError(
+            "sevDesk temp-file upload failed "
+            f"(POST /Voucher/Factory/uploadTempFile) with {response.status_code}: {response.text}"
+        )
+
+    data = response.json()
+    if not isinstance(data, dict):
+        raise RuntimeError("sevDesk temp-file upload response is not a JSON object")
+
+    objects = data.get("objects")
+    if not isinstance(objects, dict):
+        raise RuntimeError("sevDesk temp-file upload response has no objects payload")
+
+    remote_filename = objects.get("filename")
+    if not isinstance(remote_filename, str) or not remote_filename.strip():
+        raise RuntimeError("sevDesk temp-file upload response has no filename")
+    return remote_filename.strip()
 
 
 def book_voucher(base_url: str, token: str, voucher_id: str, payload: dict[str, Any]) -> dict[str, Any]:

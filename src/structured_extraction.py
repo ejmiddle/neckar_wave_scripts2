@@ -7,6 +7,10 @@ from typing import Any, Callable
 from openai import OpenAI
 from pydantic import BaseModel, ValidationError
 
+from src.amazon_accounting_prompt_config import (
+    AmazonReceiptAccountingPayload,
+    validate_amazon_accounting_payload_with_report,
+)
 from src.liefernscheine_prompt_config import (
     LieferscheinePayload,
     validate_lieferscheine_payload_with_report,
@@ -56,6 +60,14 @@ def _normalize_lieferscheine(
     return validate_lieferscheine_payload_with_report(payload)
 
 
+def _normalize_amazon_receipt_accounting(
+    payload: dict[str, Any],
+    context: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    del context
+    return validate_amazon_accounting_payload_with_report(payload)
+
+
 EXTRACTION_TARGETS: dict[str, ExtractionTarget] = {
     "orders_v1": ExtractionTarget(
         key="orders_v1",
@@ -72,6 +84,14 @@ EXTRACTION_TARGETS: dict[str, ExtractionTarget] = {
         description="Extract delivery note lines from text/image into the Lieferscheine payload schema.",
         model=LieferscheinePayload,
         normalize=_normalize_lieferscheine,
+    ),
+    "amazon_receipt_accounting_v1": ExtractionTarget(
+        key="amazon_receipt_accounting_v1",
+        pattern=PATTERN_TOOL_CALL_REPAIR,
+        function_name="extract_amazon_receipt_accounting_v1",
+        description="Extract accounting fields from an Amazon receipt or invoice into the accounting payload schema.",
+        model=AmazonReceiptAccountingPayload,
+        normalize=_normalize_amazon_receipt_accounting,
     ),
     # Placeholder for future structures:
     # "customers_v1": ExtractionTarget(...),
