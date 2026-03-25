@@ -6,7 +6,7 @@ class ImageExtractResponse(BaseModel):
     status: str = Field(default="ok")
     columns: list[str]
     rows: list[dict[str, str]]
-    # Native order payload aligned with `pages/5_Order_Erfassung.py`.
+    # Native order payload aligned with `pages/Order_Erfassung.py`.
     orders: list[dict]
     warnings: list[str] = []
     model_version: str
