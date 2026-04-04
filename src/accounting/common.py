@@ -1,12 +1,13 @@
 import json
 import os
 import re
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
 import streamlit as st
 
+from src.accounting.state import SEVDESK_CACHE_DIR
 from src.logging_config import logger
 from src.sevdesk.api import read_token
 from src.sevdesk.constants import DEFAULT_BASE_URL
@@ -201,3 +202,12 @@ def load_json_payload(path: Path) -> dict[str, Any] | None:
     if not isinstance(payload, dict):
         return None
     return payload
+
+
+def cache_json_payload(name: str, payload: Any) -> Path:
+    SEVDESK_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    filename = f"{timestamp}_{safe_filename_token(name)}.json"
+    path = SEVDESK_CACHE_DIR / filename
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
+    return path

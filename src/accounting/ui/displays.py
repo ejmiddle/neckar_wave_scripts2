@@ -5,7 +5,7 @@ import pandas as pd
 import streamlit as st
 
 from src.accounting.amazon_extraction import format_amazon_payment_row
-from src.accounting.common import load_json_payload, report_error
+from src.accounting.common import cache_json_payload, load_json_payload, report_error
 from src.accounting.sevdesk_browse import (
     format_latest_voucher_row,
     format_transaction_row,
@@ -18,17 +18,106 @@ from src.accounting.state import (
 )
 
 
-def show_vouchers(rows: list[dict] | None) -> None:
+def _cache_and_caption_payload(name: str, payload: object) -> None:
+    try:
+        cache_path = cache_json_payload(name, payload)
+        st.caption(f"Raw payload cached at `{cache_path}`")
+    except Exception as exc:
+        report_error(
+            f"Failed to cache raw payload: {exc}",
+            log_message="Failed to cache raw payload",
+            exc_info=True,
+        )
+
+
+def show_vouchers(rows: list[dict] | None, *, total_count: int | None = None) -> None:
     if rows is None:
         st.caption("Load the latest sevDesk Belege to inspect them here.")
         return
     if not rows:
+        if total_count:
+            st.info("No Belege match the selected status/tag filters.")
+            return
         st.info("No Belege found.")
         return
-    st.success(f"Loaded {len(rows)} Belege.")
+    if total_count is not None and total_count != len(rows):
+        st.success(f"Showing {len(rows)} of {total_count} loaded Belege.")
+    else:
+        st.success(f"Loaded {len(rows)} Belege.")
     st.dataframe(pd.DataFrame([format_latest_voucher_row(row) for row in rows]), width="stretch")
-    with st.expander("Raw API response"):
-        st.json(rows)
+    _cache_and_caption_payload("belege_raw_api_response", rows)
+
+
+def show_selectable_vouchers(
+    rows: list[dict] | None,
+    *,
+    total_count: int | None = None,
+    selection_key: str,
+    selected_ids: set[str] | None = None,
+) -> list[str]:
+    if rows is None:
+        st.caption("Load the latest sevDesk Belege to inspect them here.")
+        return []
+    if not rows:
+        if total_count:
+            st.info("No Belege match the selected status/tag filters.")
+            return []
+        st.info("No Belege found.")
+        return []
+    if total_count is not None and total_count != len(rows):
+        st.success(f"Showing {len(rows)} of {total_count} loaded Belege.")
+    else:
+        st.success(f"Loaded {len(rows)} Belege.")
+
+    visible_voucher_ids = [
+        str(row.get("id", "")).strip() for row in rows if str(row.get("id", "")).strip()
+    ]
+    selected_id_set = {str(value).strip() for value in (selected_ids or set()) if str(value).strip()}
+    widget_version_key = f"{selection_key}_widget_version"
+    widget_version = int(st.session_state.get(widget_version_key, 0))
+
+    action_col1, action_col2 = st.columns(2)
+    with action_col1:
+        select_all_clicked = st.button(
+            "Alle sichtbaren Belege auswählen",
+            width="stretch",
+            key=f"{selection_key}_select_all",
+        )
+    with action_col2:
+        deselect_all_clicked = st.button(
+            "Alle sichtbaren Belege abwählen",
+            width="stretch",
+            key=f"{selection_key}_deselect_all",
+        )
+
+    if select_all_clicked or deselect_all_clicked:
+        widget_version += 1
+        st.session_state[widget_version_key] = widget_version
+        selected_id_set = set(visible_voucher_ids) if select_all_clicked else set()
+
+    voucher_df = pd.DataFrame(
+        [
+            {
+                "selected": str(row.get("id", "")).strip() in selected_id_set,
+                **format_latest_voucher_row(row),
+            }
+            for row in rows
+        ]
+    )
+    edited_voucher_df = st.data_editor(
+        voucher_df,
+        width="stretch",
+        hide_index=True,
+        disabled=[column for column in voucher_df.columns if column != "selected"],
+        column_config={
+            "selected": st.column_config.CheckboxColumn("Select"),
+        },
+        key=f"{selection_key}_{widget_version}",
+    )
+    _cache_and_caption_payload("belege_selection_raw_api_response", rows)
+
+    selected_rows = edited_voucher_df.loc[edited_voucher_df["selected"], "id"].tolist()
+    return [str(value).strip() for value in selected_rows if str(value).strip()]
 
 
 def show_accounting_types(rows: list[dict] | None) -> None:
@@ -91,8 +180,7 @@ def show_transactions(rows: list[dict] | None) -> None:
         return
     st.success(f"Loaded {len(rows)} bookings.")
     st.dataframe(pd.DataFrame([format_transaction_row(row) for row in rows]), width="stretch")
-    with st.expander("Raw API response"):
-        st.json(rows)
+    _cache_and_caption_payload("check_account_transactions_raw_api_response", rows)
 
 
 def show_amazon_payments(rows: list[dict] | None) -> None:
@@ -104,8 +192,7 @@ def show_amazon_payments(rows: list[dict] | None) -> None:
         return
     st.success(f"Loaded {len(rows)} matching Sparkasse bookings.")
     st.dataframe(pd.DataFrame([format_amazon_payment_row(row) for row in rows]), width="stretch")
-    with st.expander("Raw API response"):
-        st.json(rows)
+    _cache_and_caption_payload("amazon_payments_raw_api_response", rows)
 
 
 def render_pdf_inline(path_str: str, *, height: int = 420) -> None:
@@ -131,4 +218,4 @@ def show_downloaded_payload(title: str, path: Path) -> None:
     if payload is None:
         st.info("No downloaded data file found.")
         return
-    st.json(payload)
+    st.caption("Payload available on disk.")

@@ -8,6 +8,8 @@ from src.accounting.amazon_customers import (
     find_customer_by_vat_id,
 )
 from src.accounting.amazon_extraction import format_amazon_payment_row
+from src.accounting.amazon_extraction import get_amazon_booking_rows
+from src.accounting.amazon_extraction import aggregate_amazon_booking_amount
 from src.accounting.common import (
     compare_booking_after_receipt_window,
     find_check_account_by_name,
@@ -125,12 +127,16 @@ def select_accounting_type_for_purchase_category(
     return find_accounting_type_by_name_fragments(rows, ["sonstiges"])
 
 
-def build_voucher_description(booking_row: dict[str, Any], extracted: dict[str, Any]) -> str:
-    document_number = str(extracted.get("document_number") or "").strip()
+def build_voucher_description(
+    booking_row: dict[str, Any],
+    *,
+    entry_index: int,
+    total_entries: int,
+) -> str:
     order_number = format_amazon_payment_row(booking_row).get("orderNumber") or ""
-    if document_number:
-        return document_number
     if order_number:
+        if total_entries > 1:
+            return f"{order_number}-{entry_index}"
         return order_number
     return f"Amazon-Beleg-{booking_row.get('id', '-')}"
 
@@ -164,11 +170,15 @@ def build_amazon_voucher_payload(
     booking_row: dict[str, Any],
     extracted: dict[str, Any],
     pdf_path: str,
+    entry_index: int,
+    total_entries: int,
     accounting_type_rows: list[dict[str, Any]],
     check_account_rows: list[dict[str, Any]],
     customer_row: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     booking_date = parse_transaction_date(booking_row)
+    source_booking_rows = get_amazon_booking_rows(booking_row)
+    source_booking_ids = [str(row.get("id", "")).strip() for row in source_booking_rows]
     invoice_date = parse_iso_date(extracted.get("invoice_date")) or booking_date or date.today()
     payment_deadline = invoice_date + timedelta(days=14)
     gross_amount = parse_amount_value(extracted.get("amount")) or 0.0
@@ -189,7 +199,11 @@ def build_amazon_voucher_payload(
     voucher["voucherDate"] = format_sevdesk_date(invoice_date)
     voucher["deliveryDate"] = format_sevdesk_date(invoice_date)
     voucher["paymentDeadline"] = format_sevdesk_date(payment_deadline)
-    voucher["description"] = build_voucher_description(booking_row, extracted)
+    voucher["description"] = build_voucher_description(
+        booking_row,
+        entry_index=entry_index,
+        total_entries=total_entries,
+    )
     voucher["supplierName"] = determine_supplier_name(booking_row, extracted)
     voucher["taxRule"] = select_tax_rule_for_extraction(extracted)
     selected_tax_set = select_tax_set_for_extraction(extracted)
@@ -211,8 +225,10 @@ def build_amazon_voucher_payload(
         **payload.get("notes", {}),
         "amazon_receipt_match": {
             "booking_id": str(booking_row.get("id", "")),
+            "booking_ids": source_booking_ids,
+            "booking_count": len(source_booking_rows),
             "booking_date": booking_date.isoformat() if booking_date else None,
-            "booking_amount": parse_amount_value(booking_row.get("amount")),
+            "booking_amount": aggregate_amazon_booking_amount(booking_row),
             "order_number": format_amazon_payment_row(booking_row).get("orderNumber") or None,
             "matched_pdf_path": pdf_path,
             "match_rule": (
@@ -233,7 +249,7 @@ def build_amazon_voucher_payload(
         },
         "selected_tax_rule": voucher.get("taxRule"),
         "selected_tax_set": voucher.get("taxSet"),
-        "generated_by": "pages/Accounting.py",
+        "generated_by": "apps/accounting.py",
     }
     return normalize_create_payload(payload)
 
@@ -265,7 +281,8 @@ def build_voucher_payload_entries(
         if row.get("id") is not None
     }
     entries: list[dict[str, Any]] = []
-    for extraction_result in extraction_results:
+    total_entries = len(extraction_results)
+    for entry_index, extraction_result in enumerate(extraction_results, start=1):
         pdf_path = str(extraction_result.get("pdfPath", "")).strip()
         extracted = extraction_result.get("extracted")
         if not pdf_path or not isinstance(extracted, dict):
@@ -279,6 +296,8 @@ def build_voucher_payload_entries(
             booking_row=booking_row,
             extracted=extracted,
             pdf_path=pdf_path,
+            entry_index=entry_index,
+            total_entries=total_entries,
             accounting_type_rows=accounting_type_rows,
             check_account_rows=check_account_rows,
             customer_row=matched_customer,

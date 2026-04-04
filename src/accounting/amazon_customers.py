@@ -243,7 +243,7 @@ def build_customer_create_payload(
             "id": 3,
             "objectName": "Category",
         },
-        "description": "Automatically created from Amazon receipt extraction in pages/Accounting.py",
+        "description": "Automatically created from Amazon receipt extraction in the accounting app",
     }
 
 

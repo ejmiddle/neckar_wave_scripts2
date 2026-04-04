@@ -1,6 +1,7 @@
 version: '3'
 
 tasks:
+  # Dev Streamlit apps
   default:
     desc: Show available tasks
     cmds:
@@ -9,30 +10,54 @@ tasks:
   install:
     desc: Install dependencies using uv
     cmds:
-      - uv sync
+      - UV_CACHE_DIR=.uv-cache uv sync
     sources:
       - pyproject.toml
       - uv.lock
 
-  runapp:
-    desc: Run streamlit_app.py with environment from .env
+  _streamlit_app:
+    internal: true
     deps: [install]
     cmds:
-      - set -a; source .env; set +a; uv run streamlit run streamlit_app.py
+      - sh -c 'if [ -f .env ]; then set -a; . ./.env; set +a; fi; UV_CACHE_DIR=.uv-cache uv run streamlit run {{.APP_ENTRYPOINT}} --server.port {{.APP_PORT}} --browser.serverPort {{.APP_PORT}}'
+
+  dev_app_main:
+    desc: Run the main Streamlit app on port 8080
+    cmds:
+      - task: _streamlit_app
+        vars:
+          APP_ENTRYPOINT: apps/main.py
+          APP_PORT: '8080'
     interactive: true
 
+  dev_app_accounting:
+    desc: Run the accounting Streamlit app on port 8081
+    cmds:
+      - task: _streamlit_app
+        vars:
+          APP_ENTRYPOINT: apps/accounting.py
+          APP_PORT: '8081'
+    interactive: true
+
+  runapp:
+    desc: Deprecated alias for `dev_app_main`
+    cmds:
+      - task: dev_app_main
+    interactive: true
+
+  # Other tasks
   api_run:
     desc: Run FastAPI image API on port 8000
     deps: [install]
     cmds:
-      - set -a; source .env; set +a; uv run uvicorn fastapi_app:app --host 0.0.0.0 --port 8000
+      - set -a; source .env; set +a; UV_CACHE_DIR=.uv-cache uv run uvicorn fastapi_app:app --host 0.0.0.0 --port 8000
     interactive: true
 
   api_dev:
     desc: Run FastAPI image API with auto-reload
     deps: [install]
     cmds:
-      - set -a; source .env; set +a; uv run uvicorn fastapi_app:app --host 0.0.0.0 --port 8000 --reload
+      - set -a; source .env; set +a; UV_CACHE_DIR=.uv-cache uv run uvicorn fastapi_app:app --host 0.0.0.0 --port 8000 --reload
     interactive: true
 
   api_tls_cert:
@@ -45,14 +70,14 @@ tasks:
     desc: Run FastAPI image API over HTTPS on port 8443
     deps: [install]
     cmds:
-      - set -a; source .env; set +a; uv run uvicorn fastapi_app:app --host 0.0.0.0 --port 8443 --ssl-keyfile certs/localhost-key.pem --ssl-certfile certs/localhost.pem
+      - set -a; source .env; set +a; UV_CACHE_DIR=.uv-cache uv run uvicorn fastapi_app:app --host 0.0.0.0 --port 8443 --ssl-keyfile certs/localhost-key.pem --ssl-certfile certs/localhost.pem
     interactive: true
 
   api_dev_https:
     desc: Run FastAPI image API over HTTPS with auto-reload on port 8443
     deps: [install]
     cmds:
-      - set -a; source .env; set +a; uv run uvicorn fastapi_app:app --host 0.0.0.0 --port 8443 --reload --ssl-keyfile certs/localhost-key.pem --ssl-certfile certs/localhost.pem
+      - set -a; source .env; set +a; UV_CACHE_DIR=.uv-cache uv run uvicorn fastapi_app:app --host 0.0.0.0 --port 8443 --reload --ssl-keyfile certs/localhost-key.pem --ssl-certfile certs/localhost.pem
     interactive: true
 
   api_health:
@@ -100,88 +125,161 @@ tasks:
     desc: Run the internet ping test script
     deps: [install]
     cmds:
-      - uv run python scripts/ping_test_internet.py monitor
+      - UV_CACHE_DIR=.uv-cache uv run python scripts/ping_test_internet.py monitor
 
   ping_test_internet_plot:
     desc: Plot results from the internet ping test logfile
     deps: [install]
     cmds:
-      - uv run python scripts/ping_test_internet.py plot
-
-  sevdesk_export_master_data:
-    desc: Export essential sevDesk master data (buchunggskonten + zahlungskonten) to JSON
-    deps: [install]
-    cmds:
-      - set -a; source .env; set +a; uv run python -m src.sevdesk export-buchunggskonten --output {{.BUCHUNGGSKONTEN_OUTPUT}} {{.CLI_ARGS}}
-      - set -a; source .env; set +a; uv run python -m src.sevdesk export-zahlungskonten --output {{.ZAHLUNGSKONTEN_OUTPUT}} {{.CLI_ARGS}}
-    vars:
-      BUCHUNGGSKONTEN_OUTPUT: '{{.BUCHUNGGSKONTEN_OUTPUT | default "data/sevdesk/informationen/buchunggskonten.json"}}'
-      ZAHLUNGSKONTEN_OUTPUT: '{{.ZAHLUNGSKONTEN_OUTPUT | default "data/sevdesk/informationen/zahlungskonten.json"}}'
-      CLI_ARGS: '{{.CLI_ARGS | default ""}}'
-
-  sevdesk_create_beleg_template:
-    desc: Create a complete dummy JSON input template for sevDesk Beleg creation
-    deps: [install]
-    cmds:
-      - uv run python -m src.sevdesk template --output {{.OUTPUT}}
-    vars:
-      OUTPUT: '{{.OUTPUT | default "data/sevdesk/beleg_create_input.example.json"}}'
-
-  sevdesk_beleg_umbuchen:
-    desc: Check latest Belege, identify matching one from template description, then update that Beleg to APITEST Zahlungskonto
-    deps: [install]
-    cmds:
-      - uv run python -m src.sevdesk template --input-template {{.INPUT}} --output {{.INPUT}} --zahlungskonten-file {{.ZAHLUNGSKONTEN_FILE}} --buchunggskonten-file {{.BUCHUNGGSKONTEN_FILE}} --check-account-name "{{.CHECK_ACCOUNT_NAME}}" --accounting-type-name-contains "{{.ACCOUNTING_TYPE_NAME}}"
-      - set -a; source .env; set +a; if [ "{{.APPLY}}" = "1" ]; then uv run python -m src.sevdesk assign-from-latest --input {{.INPUT}} --latest-limit {{.LATEST_LIMIT}} --zahlungskonten-file {{.ZAHLUNGSKONTEN_FILE}} --buchunggskonten-file {{.BUCHUNGGSKONTEN_FILE}} --check-account-name "{{.CHECK_ACCOUNT_NAME}}" --accounting-type-name-contains "{{.ACCOUNTING_TYPE_NAME}}" {{.ASSIGN_ARGS}}; else uv run python -m src.sevdesk assign-from-latest --input {{.INPUT}} --latest-limit {{.LATEST_LIMIT}} --zahlungskonten-file {{.ZAHLUNGSKONTEN_FILE}} --buchunggskonten-file {{.BUCHUNGGSKONTEN_FILE}} --check-account-name "{{.CHECK_ACCOUNT_NAME}}" --accounting-type-name-contains "{{.ACCOUNTING_TYPE_NAME}}" --dry-run {{.ASSIGN_ARGS}}; fi
-    vars:
-      INPUT: '{{.INPUT | default "data/sevdesk/beleg_create_input.apitest_verrechnungskonto.json"}}'
-      LATEST_LIMIT: '{{.LATEST_LIMIT | default "25"}}'
-      ZAHLUNGSKONTEN_FILE: '{{.ZAHLUNGSKONTEN_FILE | default "data/sevdesk/informationen/zahlungskonten.json"}}'
-      BUCHUNGGSKONTEN_FILE: '{{.BUCHUNGGSKONTEN_FILE | default "data/sevdesk/informationen/buchunggskonten.json"}}'
-      CHECK_ACCOUNT_NAME: '{{.CHECK_ACCOUNT_NAME | default "APITEST"}}'
-      ACCOUNTING_TYPE_NAME: '{{.ACCOUNTING_TYPE_NAME | default ""}}'
-      APPLY: '{{.APPLY | default "0"}}'
-      ASSIGN_ARGS: '{{.ASSIGN_ARGS | default ""}}'
-
-  sevdesk_create_beleg_dry_run:
-    desc: Validate and print Beleg creation payload from JSON input (no API write)
-    deps: [install]
-    cmds:
-      - set -a; source .env; set +a; uv run python -m src.sevdesk create --input {{.INPUT}} --dry-run
-    vars:
-      INPUT: '{{.INPUT | default "data/sevdesk/beleg_create_input.example.json"}}'
-
-  sevdesk_create_beleg:
-    desc: Create a new sevDesk Beleg from JSON input file
-    deps: [install]
-    cmds:
-      - set -a; source .env; set +a; uv run python -m src.sevdesk create --input {{.INPUT}}
-    vars:
-      INPUT: '{{.INPUT | default "data/sevdesk/beleg_create_input.example.json"}}'
+      - UV_CACHE_DIR=.uv-cache uv run python scripts/ping_test_internet.py plot
 
   clean:
-    desc: Clean cache and temporary files
+    desc: Alias for `cache_clear`
     cmds:
+      - task: cache_clear
+
+  cache_clear:
+    desc: Clear local uv, Streamlit, and Python caches
+    cmds:
+      - rm -rf .uv-cache .streamlit/cache .pytest_cache .mypy_cache
       - find . -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
 
-  docker_build_app:
-    desc: Build fresh amd64 app image with current code and dependencies
+  _docker_build_streamlit_app:
+    internal: true
     cmds:
-      - sh -c 'if [ "${DOCKER_BUILD_REGISTRY_CACHE:-0}" = "1" ]; then docker buildx build --platform linux/amd64 --pull --cache-from type=registry,ref=ghcr.io/ejmiddle/streamlit-hello:buildcache --cache-to type=registry,ref=ghcr.io/ejmiddle/streamlit-hello:buildcache,mode=max -t ghcr.io/ejmiddle/streamlit-hello:latest --load -f Dockerfile .; else docker buildx build --platform linux/amd64 --pull -t ghcr.io/ejmiddle/streamlit-hello:latest --load -f Dockerfile .; fi'
-      - echo "docker images ghcr.io/ejmiddle/streamlit-hello:latest"
+      - sh -c 'if [ "${DOCKER_BUILD_REGISTRY_CACHE:-0}" = "1" ]; then docker buildx build --platform linux/amd64 --pull --build-arg STREAMLIT_APP_FILE={{.APP_ENTRYPOINT}} --cache-from type=registry,ref={{.IMAGE}}:buildcache --cache-to type=registry,ref={{.IMAGE}}:buildcache,mode=max -t {{.IMAGE}}:latest --load -f Dockerfile .; else docker buildx build --platform linux/amd64 --pull --build-arg STREAMLIT_APP_FILE={{.APP_ENTRYPOINT}} -t {{.IMAGE}}:latest --load -f Dockerfile .; fi'
+      - echo "docker images {{.IMAGE}}:latest"
+
+  _docker_push_streamlit_app:
+    internal: true
+    cmds:
+      - docker push {{.IMAGE}}:latest
+      - sh -c 'if [ "${DOCKER_BUILD_REGISTRY_CACHE:-0}" = "1" ]; then docker push {{.IMAGE}}:buildcache; fi'
+      - echo 'Tip-> source .env && echo "$GHCR_TOKEN" | docker login ghcr.io -u ejmiddle --password-stdin'
+
+  dev_docker_build_main_app:
+    desc: Build the main Streamlit app image for GHCR
+    cmds:
+      - task: _docker_build_streamlit_app
+        vars:
+          APP_ENTRYPOINT: apps/main.py
+          IMAGE: ghcr.io/ejmiddle/neckarwave-main
+
+  dev_docker_push_main_app:
+    desc: Push the main Streamlit app image and build cache to GHCR
+    cmds:
+      - task: _docker_push_streamlit_app
+        vars:
+          IMAGE: ghcr.io/ejmiddle/neckarwave-main
+
+  dev_docker_publish_main_app:
+    desc: Build then push the main Streamlit app image
+    cmds:
+      - task: dev_docker_build_main_app
+      - task: dev_docker_push_main_app
+
+  dev_docker_run_main_app:
+    desc: Run the main app container locally on port 8080 with live source mounts
+    cmds:
+      - task: dev_docker_build_main_app
+      - docker run --rm --platform linux/amd64 --env-file .env -e STREAMLIT_APP_FILE=apps/main.py -e STREAMLIT_SERVER_PORT=8080 -p 8080:8080 -v "$(pwd)/apps:/app/apps" -v "$(pwd)/data:/app/data" -v "$(pwd)/src:/app/src" -v "$(pwd)/pages:/app/pages" -v "$(pwd)/streamlit_app.py:/app/streamlit_app.py:ro" -v "$(pwd)/.streamlit:/app/.streamlit:ro" -v "$(pwd)/logging.conf:/app/logging.conf:ro" ghcr.io/ejmiddle/neckarwave-main:latest
+    interactive: true
+
+  dev_docker_build_accounting_app:
+    desc: Build the accounting Streamlit app image for GHCR
+    cmds:
+      - task: _docker_build_streamlit_app
+        vars:
+          APP_ENTRYPOINT: apps/accounting.py
+          IMAGE: ghcr.io/ejmiddle/neckarwave-accounting
+
+  dev_docker_push_accounting_app:
+    desc: Push the accounting Streamlit app image and build cache to GHCR
+    cmds:
+      - task: _docker_push_streamlit_app
+        vars:
+          IMAGE: ghcr.io/ejmiddle/neckarwave-accounting
+
+  dev_docker_publish_accounting_app:
+    desc: Build then push the accounting Streamlit app image
+    cmds:
+      - task: dev_docker_build_accounting_app
+      - task: dev_docker_push_accounting_app
+
+  dev_docker_run_accounting_app:
+    desc: Run the accounting app container locally on port 8081 with live source mounts
+    cmds:
+      - task: dev_docker_build_accounting_app
+      - docker run --rm --platform linux/amd64 --env-file .env -e STREAMLIT_APP_FILE=apps/accounting.py -e STREAMLIT_SERVER_PORT=8080 -p 8081:8080 -v "$(pwd)/apps:/app/apps" -v "$(pwd)/data:/app/data" -v "$(pwd)/src:/app/src" -v "$(pwd)/pages:/app/pages" -v "$(pwd)/streamlit_app.py:/app/streamlit_app.py:ro" -v "$(pwd)/.streamlit:/app/.streamlit:ro" -v "$(pwd)/logging.conf:/app/logging.conf:ro" ghcr.io/ejmiddle/neckarwave-accounting:latest
+    interactive: true
+
+  # Deprecated compatibility aliases
+  app_main:
+    desc: Deprecated alias for `dev_app_main`
+    cmds:
+      - task: dev_app_main
+
+  app_accounting:
+    desc: Deprecated alias for `dev_app_accounting`
+    cmds:
+      - task: dev_app_accounting
+
+  docker_build_app:
+    desc: Deprecated alias for `dev_docker_build_main_app`
+    cmds:
+      - task: dev_docker_build_main_app
 
   docker_push_app:
-    desc: Push image and build cache to GHCR
+    desc: Deprecated alias for `dev_docker_push_main_app`
     cmds:
-      - docker push ghcr.io/ejmiddle/streamlit-hello:latest
-      - sh -c 'if [ "${DOCKER_BUILD_REGISTRY_CACHE:-0}" = "1" ]; then docker push ghcr.io/ejmiddle/streamlit-hello:buildcache; fi'
-      - echo "Tip-> source .env && echo \"$GHCR_TOKEN\" | docker login ghcr.io -u ejmiddle --password-stdin"
+      - task: dev_docker_push_main_app
 
   docker_run_app:
-    desc: Run app container with live local source mounts
-    deps: [docker_build_app]
+    desc: Deprecated alias for `dev_docker_run_main_app`
     cmds:
-      - docker run --rm --platform linux/amd64 --env-file .env -p 8501:8501 -v "$(pwd)/data:/app/data" -v "$(pwd)/src:/app/src" -v "$(pwd)/pages:/app/pages" -v "$(pwd)/streamlit_app.py:/app/streamlit_app.py:ro" -v "$(pwd)/.streamlit:/app/.streamlit:ro" -v "$(pwd)/logging.conf:/app/logging.conf:ro" ghcr.io/ejmiddle/streamlit-hello:latest
+      - task: dev_docker_run_main_app
+    interactive: true
+
+  docker_build_main_app:
+    desc: Deprecated alias for `dev_docker_build_main_app`
+    cmds:
+      - task: dev_docker_build_main_app
+
+  docker_push_main_app:
+    desc: Deprecated alias for `dev_docker_push_main_app`
+    cmds:
+      - task: dev_docker_push_main_app
+
+  docker_publish_main_app:
+    desc: Deprecated alias for `dev_docker_publish_main_app`
+    cmds:
+      - task: dev_docker_publish_main_app
+
+  docker_run_main_app:
+    desc: Deprecated alias for `dev_docker_run_main_app`
+    cmds:
+      - task: dev_docker_run_main_app
+    interactive: true
+
+  docker_build_accounting_app:
+    desc: Deprecated alias for `dev_docker_build_accounting_app`
+    cmds:
+      - task: dev_docker_build_accounting_app
+
+  docker_push_accounting_app:
+    desc: Deprecated alias for `dev_docker_push_accounting_app`
+    cmds:
+      - task: dev_docker_push_accounting_app
+
+  docker_publish_accounting_app:
+    desc: Deprecated alias for `dev_docker_publish_accounting_app`
+    cmds:
+      - task: dev_docker_publish_accounting_app
+
+  docker_run_accounting_app:
+    desc: Deprecated alias for `dev_docker_run_accounting_app`
+    cmds:
+      - task: dev_docker_run_accounting_app
     interactive: true
 
   docker_build_fastapi_amd64:
@@ -212,7 +310,6 @@ tasks:
     cmds:
       - docker run --rm --platform linux/amd64 --env-file .env -p 8000:8000 ghcr.io/ejmiddle/fastapi-backend:latest
     interactive: true
-
 
   qdrant_up:
     desc: Start a local Qdrant server (latest stable)

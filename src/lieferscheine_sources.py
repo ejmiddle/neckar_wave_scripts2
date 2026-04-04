@@ -242,6 +242,49 @@ def split_pdf_bytes_to_page_images(
     return output
 
 
+def split_pdf_bytes_to_page_pdfs(
+    pdf_bytes: bytes,
+    *,
+    pdf_name: str = "lieferschein.pdf",
+) -> list[tuple[bytes, str]]:
+    fitz = _require_pymupdf()
+    started = time.perf_counter()
+    logger.info("PDF page-to-pdf split started file=%s bytes=%s", pdf_name, len(pdf_bytes))
+
+    try:
+        with fitz.open(stream=pdf_bytes, filetype="pdf") as document:
+            page_count = document.page_count
+            if page_count <= 0:
+                raise RuntimeError("PDF enthaelt keine Seiten.")
+
+            base_stem = Path(pdf_name).stem or "lieferschein"
+            output: list[tuple[bytes, str]] = []
+            for page_index in range(page_count):
+                single_page = fitz.open()
+                try:
+                    single_page.insert_pdf(document, from_page=page_index, to_page=page_index)
+                    page_bytes = single_page.tobytes()
+                finally:
+                    single_page.close()
+
+                output.append(
+                    (
+                        page_bytes,
+                        f"{base_stem}_seite_{page_index + 1}.pdf",
+                    )
+                )
+    except Exception as exc:
+        raise RuntimeError(f"PDF konnte nicht in Einzelseiten-PDFs aufgeteilt werden: {exc}") from exc
+
+    logger.info(
+        "PDF page-to-pdf split finished file=%s pages=%s duration_s=%.3f",
+        pdf_name,
+        len(output),
+        time.perf_counter() - started,
+    )
+    return output
+
+
 def discover_local_lieferschein_images(
     *,
     base_dir: Path = LIEFERSCHEINE_DIR,

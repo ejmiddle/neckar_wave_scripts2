@@ -11,6 +11,12 @@ from src.amazon_accounting_prompt_config import (
     AmazonReceiptAccountingPayload,
     validate_amazon_accounting_payload_with_report,
 )
+from src.accounting.lohn_belege_prompt_config import (
+    LohnkostenPayload,
+    U1PagePayload,
+    validate_lohnkosten_payload_with_report,
+    validate_u1_page_payload_with_report,
+)
 from src.liefernscheine_prompt_config import (
     LieferscheinePayload,
     validate_lieferscheine_payload_with_report,
@@ -68,6 +74,22 @@ def _normalize_amazon_receipt_accounting(
     return validate_amazon_accounting_payload_with_report(payload)
 
 
+def _normalize_lohnkosten(
+    payload: dict[str, Any],
+    context: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    del context
+    return validate_lohnkosten_payload_with_report(payload)
+
+
+def _normalize_u1_page(
+    payload: dict[str, Any],
+    context: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    del context
+    return validate_u1_page_payload_with_report(payload)
+
+
 EXTRACTION_TARGETS: dict[str, ExtractionTarget] = {
     "orders_v1": ExtractionTarget(
         key="orders_v1",
@@ -92,6 +114,22 @@ EXTRACTION_TARGETS: dict[str, ExtractionTarget] = {
         description="Extract accounting fields from an Amazon receipt or invoice into the accounting payload schema.",
         model=AmazonReceiptAccountingPayload,
         normalize=_normalize_amazon_receipt_accounting,
+    ),
+    "lohnkosten_accounting_v1": ExtractionTarget(
+        key="lohnkosten_accounting_v1",
+        pattern=PATTERN_TOOL_CALL_REPAIR,
+        function_name="extract_lohnkosten_accounting_v1",
+        description="Extract payroll totals from a Lohnkosten PDF into the payroll payload schema.",
+        model=LohnkostenPayload,
+        normalize=_normalize_lohnkosten,
+    ),
+    "u1_page_accounting_v1": ExtractionTarget(
+        key="u1_page_accounting_v1",
+        pattern=PATTERN_TOOL_CALL_REPAIR,
+        function_name="extract_u1_page_accounting_v1",
+        description="Extract the reimbursement amount from a U1 PDF page into the page payload schema.",
+        model=U1PagePayload,
+        normalize=_normalize_u1_page,
     ),
     # Placeholder for future structures:
     # "customers_v1": ExtractionTarget(...),

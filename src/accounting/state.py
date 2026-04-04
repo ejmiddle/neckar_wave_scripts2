@@ -8,6 +8,7 @@ ACCOUNTING_TYPES_EXPORT_PATH = Path("data/sevdesk/master_data/accounting_types.j
 CHECK_ACCOUNTS_EXPORT_PATH = Path("data/sevdesk/master_data/checkaccounts.json")
 TAX_RULES_EXPORT_PATH = Path("data/sevdesk/master_data/tax_rules.json")
 TAX_SETS_EXPORT_PATH = Path("data/sevdesk/master_data/tax_sets.json")
+SEVDESK_CACHE_DIR = Path("data/sevdesk/cache")
 AMAZON_RECEIPTS_DIR = Path("data/sevdesk/Amazon_Belege")
 AMAZON_VOUCHER_OUTPUT_DIR = Path("data/sevdesk/amazon_voucher_payloads")
 
@@ -40,6 +41,7 @@ AMAZON_ANALYSIS_SESSION_KEYS = {
     "sevdesk_sparkasse_amazon_pdf_matches",
     "sevdesk_sparkasse_amazon_llm_result",
     "sevdesk_sparkasse_amazon_voucher_payload",
+    "sevdesk_sparkasse_amazon_result_cursor",
 }
 AMAZON_CUSTOMERS_SESSION_KEY = "sevdesk_amazon_customers_rows"
 

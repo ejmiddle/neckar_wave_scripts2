@@ -1,6 +1,8 @@
 # syntax=docker/dockerfile:1.5
 FROM python:3.12-slim
 
+ARG STREAMLIT_APP_FILE=apps/main.py
+
 WORKDIR /app
 RUN --mount=type=cache,target=/root/.cache/uv pip install --no-cache-dir uv
 
@@ -10,6 +12,7 @@ COPY uv.lock /app/uv.lock
 RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev --no-install-project
 
 # Copy application sources and runtime assets.
+COPY apps /app/apps
 COPY streamlit_app.py /app/streamlit_app.py
 COPY fastapi_app.py /app/fastapi_app.py
 COPY src /app/src
@@ -31,8 +34,10 @@ RUN mkdir -p /app/app_files \
     && cp /app/src/logging_config.py /app/app_files/logging_config.py \
     && touch /app/app_files/__init__.py
 
-ENV PYTHONPATH=/app/src
+ENV PYTHONPATH=/app:/app/src
+ENV STREAMLIT_APP_FILE=${STREAMLIT_APP_FILE}
+ENV STREAMLIT_SERVER_PORT=8080
 VOLUME ["/app/data"]
 
-EXPOSE 8501
-CMD ["uv", "run", "streamlit", "run", "streamlit_app.py", "--server.address=0.0.0.0", "--server.port=8501"]
+EXPOSE 8080
+CMD ["sh", "-c", "uv run streamlit run \"$STREAMLIT_APP_FILE\" --server.address=0.0.0.0 --server.port=${STREAMLIT_SERVER_PORT}"]

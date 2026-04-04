@@ -253,7 +253,7 @@ def default_create_template(
             "mapAll": True,
             "voucherType": "VOU",
             "creditDebit": "C",
-            "status": 100,
+            "status": 50,
             "voucherDate": today.strftime("%d.%m.%Y"),
             "deliveryDate": today.strftime("%d.%m.%Y"),
             "paymentDeadline": deadline.strftime("%d.%m.%Y"),
@@ -516,7 +516,7 @@ def normalize_create_payload(raw_payload: dict[str, Any]) -> dict[str, Any]:
         voucher.setdefault("mapAll", True)
         voucher.setdefault("voucherType", "VOU")
         voucher.setdefault("creditDebit", "C")
-        voucher.setdefault("status", 100)
+        voucher.setdefault("status", 50)
         voucher.setdefault("voucherDate", today_str())
         voucher.setdefault("deliveryDate", voucher.get("voucherDate"))
         voucher.setdefault("currency", "EUR")

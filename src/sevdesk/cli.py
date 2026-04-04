@@ -7,7 +7,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .api import (
-    book_voucher,
     create_voucher,
     fetch_all_accounting_types,
     fetch_all_check_accounts,
@@ -17,6 +16,7 @@ from .api import (
     request_voucher_by_id,
     request_vouchers,
 )
+from .booking import book_voucher_to_check_account
 from .constants import (
     DEFAULT_BASE_URL,
     DEFAULT_BUCHUNGGSKONTEN_EXPORT_PATH,
@@ -51,7 +51,7 @@ def parse_args() -> argparse.Namespace:
 
     subparsers = parser.add_subparsers(dest="command")
 
-    latest_parser = subparsers.add_parser("latest", help="Show latest Belege")
+    latest_parser = subparsers.add_parser("latest", help="Show Belegverwaltung")
     latest_parser.add_argument("--limit", type=int, default=10, help="Number of Belege to show")
 
     accounting_types_parser = subparsers.add_parser(
@@ -190,12 +190,12 @@ def parse_args() -> argparse.Namespace:
         "--latest-limit",
         type=int,
         default=25,
-        help="Number of latest Belege to inspect when identifying the correct one",
+        help="Number of Belegverwaltung to inspect when identifying the correct one",
     )
     assign_latest_parser.add_argument(
         "--match-description",
         default="",
-        help="Explicit description to match in latest Belege. Defaults to template voucher.description",
+        help="Explicit description to match in Belegverwaltung. Defaults to template voucher.description",
     )
     assign_latest_parser.add_argument(
         "--buchunggskonten-file",
@@ -456,9 +456,9 @@ def run_assign_from_latest(args: argparse.Namespace, token: str) -> int:
 
     latest_vouchers = request_vouchers(args.base_url, token, args.latest_limit)
     if not latest_vouchers:
-        raise RuntimeError("No latest Belege found to identify target voucher.")
+        raise RuntimeError("No Belegverwaltung found to identify target voucher.")
 
-    print(f"Checked latest Belege: {len(latest_vouchers)} candidates")
+    print(f"Checked Belegverwaltung: {len(latest_vouchers)} candidates")
 
     template_voucher = base_template.get("voucher")
     template_description = ""
@@ -523,19 +523,6 @@ def run_assign_from_latest(args: argparse.Namespace, token: str) -> int:
             f"check_account_name={args.check_account_name!r}"
         )
 
-    def parse_amount(value: object, field_name: str) -> float:
-        if value is None:
-            return 0.0
-        if isinstance(value, (int, float)):
-            return float(value)
-        text = str(value).strip().replace(",", ".")
-        if not text:
-            return 0.0
-        try:
-            return float(text)
-        except ValueError as exc:
-            raise RuntimeError(f"Could not parse {field_name}={value!r} as amount.") from exc
-
     if has_accounting_override:
         payload = apply_account_assignment_to_payload(
             base_template,
@@ -597,69 +584,29 @@ def run_assign_from_latest(args: argparse.Namespace, token: str) -> int:
         )
         return 0
 
-    existing = request_voucher_by_id(args.base_url, token, target_voucher_id)
-    if existing is None:
-        raise RuntimeError(
-            f"Safety check failed: target Beleg id={target_voucher_id} not found before booking."
-        )
-
-    before_status = str(existing.get("status", "")).strip()
-    before_paid_amount = parse_amount(existing.get("paidAmount"), "paidAmount")
-    amount_to_book = parse_amount(existing.get("sumGross"), "sumGross")
-    if amount_to_book <= 0:
-        raise RuntimeError(
-            f"Cannot book voucher id={target_voucher_id}: invalid sumGross={existing.get('sumGross')!r}."
-        )
-    if before_status == "1000" and before_paid_amount >= amount_to_book:
-        raise RuntimeError(
-            f"Voucher id={target_voucher_id} is already paid "
-            f"(status={before_status}, paidAmount={before_paid_amount}). "
-            "To change the payment account, reset the voucher to open first and then book it again."
-        )
-
     selected_check_account_id = str(selected_zahlungskonto.get("id", "")).strip()
     if not selected_check_account_id:
         raise RuntimeError("Selected zahlungskonto has no id.")
 
-    check_account_id: int | str
-    try:
-        check_account_id = int(selected_check_account_id)
-    except ValueError:
-        check_account_id = selected_check_account_id
-
-    booking_payload = {
-        "amount": amount_to_book,
-        "date": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
-        "type": "FULL_PAYMENT",
-        "checkAccount": {
-            "id": check_account_id,
-            "objectName": "CheckAccount",
-        },
-    }
-
     if args.dry_run:
+        dry_run_result = book_voucher_to_check_account(
+            args.base_url,
+            token,
+            target_voucher_id,
+            selected_check_account_id,
+            dry_run=True,
+        )
         print("Dry-run successful. Booking payload to be sent:")
-        print(json.dumps(booking_payload, indent=2, ensure_ascii=True))
+        print(json.dumps(dry_run_result["booking_payload"], indent=2, ensure_ascii=True))
         return 0
 
-    response_payload = book_voucher(args.base_url, token, target_voucher_id, booking_payload)
-
-    updated = request_voucher_by_id(args.base_url, token, target_voucher_id)
-    if updated is None:
-        raise RuntimeError(
-            f"Post-booking verification failed: could not load Beleg id={target_voucher_id}."
-        )
-    after_status = str(updated.get("status", "")).strip()
-    after_paid_amount = parse_amount(updated.get("paidAmount"), "paidAmount")
-    after_pay_date = str(updated.get("payDate", "")).strip()
-
-    if before_status == after_status and after_paid_amount <= before_paid_amount:
-        raise RuntimeError(
-            "Post-booking verification failed: status and paid amount did not change "
-            f"(status={after_status!r}, paidAmount={after_paid_amount})."
-        )
-
-    first_object = first_object_from_response(response_payload)
+    booking_result = book_voucher_to_check_account(
+        args.base_url,
+        token,
+        target_voucher_id,
+        selected_check_account_id,
+    )
+    first_object = booking_result.get("response_object")
     print("Beleg booked successfully.")
     if isinstance(first_object, dict):
         print(f"id: {first_object.get('id', '-')}")
@@ -668,10 +615,10 @@ def run_assign_from_latest(args: argparse.Namespace, token: str) -> int:
         print(f"amountPayed: {first_object.get('amountPayed', '-')}")
         print(f"bookingDate: {first_object.get('bookingDate', '-')}")
     print(
-        f"Verified target Beleg id={target_voucher_id}: "
-        f"status {before_status or '-'} -> {after_status or '-'}, "
-        f"paidAmount {before_paid_amount} -> {after_paid_amount}, "
-        f"payDate={after_pay_date or '-'}."
+        f"Verified target Beleg id={booking_result['voucher_id']}: "
+        f"status {booking_result['before_status'] or '-'} -> {booking_result['after_status'] or '-'}, "
+        f"paidAmount {booking_result['before_paid_amount']} -> {booking_result['after_paid_amount']}, "
+        f"payDate={booking_result['pay_date'] or '-'}."
     )
     return 0
 
