@@ -52,13 +52,6 @@ FEATURE_PAGES = [
         "icon": "🧾",
     },
     {
-        "id": "lieferscheine",
-        "path": str(REPO_ROOT / "pages/Lieferscheine.py"),
-        "title": "Lieferscheine",
-        "description": "Lieferscheine erfassen und verarbeiten",
-        "icon": "🧾",
-    },
-    {
         "id": "api_image_tester",
         "path": str(REPO_ROOT / "pages/API_Image_Test.py"),
         "title": "API Image Test",
@@ -89,7 +82,6 @@ NAV_SECTIONS = [
 ]
 
 
-@st.cache_resource
 def get_app_settings() -> dict:
     pages_by_id = {
         page["id"]: {
@@ -109,8 +101,7 @@ def get_app_settings() -> dict:
 
 
 def _init_session_state() -> None:
-    if "app_settings" not in st.session_state:
-        st.session_state.app_settings = get_app_settings()
+    st.session_state.app_settings = get_app_settings()
     if "authenticated" not in st.session_state:
         st.session_state.authenticated = True
 

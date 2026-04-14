@@ -165,6 +165,12 @@ def select_tax_set_for_extraction(extracted: dict[str, Any]) -> dict[str, Any] |
     return None
 
 
+def select_tax_type_for_extraction(extracted: dict[str, Any]) -> str:
+    if extracted.get("intra_community_supply") is True:
+        return "custom"
+    return "default"
+
+
 def build_amazon_voucher_payload(
     *,
     booking_row: dict[str, Any],
@@ -206,6 +212,7 @@ def build_amazon_voucher_payload(
     )
     voucher["supplierName"] = determine_supplier_name(booking_row, extracted)
     voucher["taxRule"] = select_tax_rule_for_extraction(extracted)
+    voucher["taxType"] = select_tax_type_for_extraction(extracted)
     selected_tax_set = select_tax_set_for_extraction(extracted)
     if selected_tax_set is not None:
         voucher["taxSet"] = selected_tax_set
@@ -258,13 +265,19 @@ def build_voucher_output_path(
     booking_row: dict[str, Any],
     extracted: dict[str, Any],
     pdf_path: str,
+    *,
+    page_number: int | None = None,
 ) -> Path:
     booking_id = safe_filename_token(booking_row.get("id"))
     descriptor = safe_filename_token(
         extracted.get("document_number") or format_amazon_payment_row(booking_row).get("orderNumber")
     )
     pdf_descriptor = safe_filename_token(Path(pdf_path).stem)
-    return AMAZON_VOUCHER_OUTPUT_DIR / f"amazon_voucher_{booking_id}_{descriptor}_{pdf_descriptor}.json"
+    page_suffix = f"_page_{page_number}" if isinstance(page_number, int) and page_number > 0 else ""
+    return (
+        AMAZON_VOUCHER_OUTPUT_DIR
+        / f"amazon_voucher_{booking_id}_{descriptor}_{pdf_descriptor}{page_suffix}.json"
+    )
 
 
 def build_voucher_payload_entries(
@@ -284,6 +297,7 @@ def build_voucher_payload_entries(
     total_entries = len(extraction_results)
     for entry_index, extraction_result in enumerate(extraction_results, start=1):
         pdf_path = str(extraction_result.get("pdfPath", "")).strip()
+        page_number = extraction_result.get("pageNumber")
         extracted = extraction_result.get("extracted")
         if not pdf_path or not isinstance(extracted, dict):
             continue
@@ -303,11 +317,19 @@ def build_voucher_payload_entries(
             customer_row=matched_customer,
         )
         validation_errors = validate_create_payload(voucher_payload, known_accounting_type_ids)
-        voucher_path = build_voucher_output_path(booking_row, extracted, pdf_path)
+        voucher_path = build_voucher_output_path(
+            booking_row,
+            extracted,
+            pdf_path,
+            page_number=page_number if isinstance(page_number, int) else None,
+        )
         write_json(voucher_path, voucher_payload)
         entries.append(
             {
                 "matchedPdfPath": pdf_path,
+                "pageNumber": page_number if isinstance(page_number, int) else None,
+                "pageName": str(extraction_result.get("pageName", "")).strip() or None,
+                "sourceKey": str(extraction_result.get("sourceKey", "")).strip() or None,
                 "path": str(voucher_path),
                 "payload": voucher_payload,
                 "sellerName": str(extracted.get("seller_name", "")).strip(),

@@ -27,6 +27,12 @@ MONTHLY_UMSATZ_FILE_SIGNATURE_STATE_KEY = "monthly_umsatz_file_signature"
 MONTHLY_UMSATZ_BELEGDATUM_STATE_KEY = "monthly_umsatz_belegdatum"
 MONTHLY_UMSATZ_UPLOAD_RESULTS_STATE_KEY = "monthly_umsatz_upload_results"
 MONTHLY_UMSATZ_INPUT_DATE_KEY = "monthly_umsatz_belegdatum_input"
+MONTHLY_VOUCHER_KIND_ORDER = ("umsatz", "voucher_verkauft", "voucher_eingeloest")
+MONTHLY_VOUCHER_KIND_LABELS = {
+    "umsatz": "Umsatz",
+    "voucher_verkauft": "Voucher verkauft",
+    "voucher_eingeloest": "Voucher eingelöst",
+}
 
 
 def _clear_state_keys(*keys: str) -> None:
@@ -59,6 +65,27 @@ def _known_accounting_type_ids(accounting_type_rows: list[dict[str, Any]]) -> se
     }
 
 
+def _is_nested_monthly_payloads(payloads: dict[str, Any]) -> bool:
+    sample_sheet = payloads.get("ALT")
+    return isinstance(sample_sheet, dict) and any(
+        isinstance(sample_sheet.get(kind), dict) for kind in MONTHLY_VOUCHER_KIND_ORDER
+    )
+
+
+def _voucher_results_for_sheet(
+    upload_results: dict[str, Any],
+    sheet_name: str,
+    voucher_kind: str,
+) -> dict[str, Any]:
+    sheet_results = upload_results.get(sheet_name, {})
+    if not isinstance(sheet_results, dict):
+        return {}
+    result = sheet_results.get(voucher_kind, {})
+    if isinstance(result, dict):
+        return result
+    return {}
+
+
 def _sync_single_upload_state(uploaded_file: Any | None) -> None:
     current_signature = _single_uploaded_file_signature(uploaded_file)
     previous_signature = st.session_state.get(MONTHLY_UMSATZ_FILE_SIGNATURE_STATE_KEY)
@@ -77,7 +104,7 @@ def _prepare_monthly_umsatz_payloads(
     *,
     belegdatum: date,
     accounting_type_rows: list[dict[str, Any]],
-) -> dict[str, dict[str, object]] | None:
+) -> dict[str, dict[str, dict[str, object]]] | None:
     extracted_payload = st.session_state.get(MONTHLY_UMSATZ_EXTRACTED_STATE_KEY)
     if not isinstance(extracted_payload, dict):
         return None
@@ -85,7 +112,11 @@ def _prepare_monthly_umsatz_payloads(
     current_date_signature = _date_signature(belegdatum)
     payloads = st.session_state.get(MONTHLY_UMSATZ_VOUCHERS_STATE_KEY)
     stored_date_signature = st.session_state.get(MONTHLY_UMSATZ_BELEGDATUM_STATE_KEY)
-    if isinstance(payloads, dict) and stored_date_signature == current_date_signature:
+    if (
+        isinstance(payloads, dict)
+        and stored_date_signature == current_date_signature
+        and _is_nested_monthly_payloads(payloads)
+    ):
         return payloads
 
     payloads = build_monthly_umsatz_voucher_payloads(
@@ -172,123 +203,152 @@ def render_monthly_umsatz_view() -> None:
     known_accounting_type_ids = _known_accounting_type_ids(accounting_type_rows)
     summary_rows = []
     for sheet_name in ("ALT", "WIE"):
-        voucher_payload = voucher_payloads.get(sheet_name)
-        if not isinstance(voucher_payload, dict):
+        sheet_payloads = voucher_payloads.get(sheet_name)
+        if not isinstance(sheet_payloads, dict):
             continue
-        upload_result = upload_results.get(sheet_name, {})
-        voucher_core = voucher_payload.get("voucher", {})
-        validation_errors = validate_create_payload(
-            voucher_payload,
-            known_accounting_type_ids=known_accounting_type_ids,
-        )
-        summary_rows.append(
-            {
-                "Sheet": sheet_name,
-                "Description": voucher_core.get("description") if isinstance(voucher_core, dict) else "-",
-                "Amount": voucher_core.get("sumGross") if isinstance(voucher_core, dict) else "-",
-                "Status": (
-                    "Upload error"
-                    if isinstance(upload_result, dict) and upload_result.get("upload_error")
-                    else "Uploaded"
-                    if isinstance(upload_result, dict) and upload_result.get("createdVoucher")
-                    else "Validation error"
-                    if validation_errors
-                    else "Prepared"
-                ),
-            }
-        )
+        for voucher_kind in MONTHLY_VOUCHER_KIND_ORDER:
+            voucher_payload = sheet_payloads.get(voucher_kind)
+            if not isinstance(voucher_payload, dict):
+                continue
+            voucher_core = voucher_payload.get("voucher", {})
+            validation_errors = validate_create_payload(
+                voucher_payload,
+                known_accounting_type_ids=known_accounting_type_ids,
+            )
+            upload_result = _voucher_results_for_sheet(upload_results, sheet_name, voucher_kind)
+            summary_rows.append(
+                {
+                    "Sheet": sheet_name,
+                    "Voucher": MONTHLY_VOUCHER_KIND_LABELS[voucher_kind],
+                    "Description": voucher_core.get("description") if isinstance(voucher_core, dict) else "-",
+                    "Amount": voucher_core.get("sumGross") if isinstance(voucher_core, dict) else "-",
+                    "Status": (
+                        "Upload error"
+                        if upload_result.get("upload_error")
+                        else "Uploaded"
+                        if upload_result.get("createdVoucher")
+                        else "Validation error"
+                        if validation_errors
+                        else "Prepared"
+                    ),
+                }
+            )
     if summary_rows:
         st.dataframe(pd.DataFrame(summary_rows), width="stretch", hide_index=True)
 
     for sheet_name in ("ALT", "WIE"):
-        voucher_payload = voucher_payloads.get(sheet_name)
-        if not isinstance(voucher_payload, dict):
+        sheet_payloads = voucher_payloads.get(sheet_name)
+        if not isinstance(sheet_payloads, dict):
             continue
 
-        upload_result = upload_results.get(sheet_name, {})
-        validation_errors = validate_create_payload(
-            voucher_payload,
-            known_accounting_type_ids=known_accounting_type_ids,
-        )
-        with st.expander(f"{sheet_name} voucher", expanded=False):
-            if isinstance(upload_result, dict) and upload_result.get("upload_error"):
-                st.error(str(upload_result["upload_error"]))
-            if isinstance(upload_result, dict) and isinstance(upload_result.get("createdVoucher"), dict):
-                created_voucher = upload_result["createdVoucher"]
-                created_voucher_id = str(created_voucher.get("id", "")).strip()
-                st.success(
-                    f"{sheet_name} voucher uploaded successfully."
-                    + (f" New id: `{created_voucher_id}`." if created_voucher_id else "")
+        with st.expander(f"{sheet_name} vouchers", expanded=False):
+            for index, voucher_kind in enumerate(MONTHLY_VOUCHER_KIND_ORDER):
+                voucher_payload = sheet_payloads.get(voucher_kind)
+                if not isinstance(voucher_payload, dict):
+                    continue
+
+                voucher_label = MONTHLY_VOUCHER_KIND_LABELS[voucher_kind]
+                upload_result = _voucher_results_for_sheet(upload_results, sheet_name, voucher_kind)
+                validation_errors = validate_create_payload(
+                    voucher_payload,
+                    known_accounting_type_ids=known_accounting_type_ids,
                 )
-                st.json(created_voucher, expanded=False)
+                voucher_positions = voucher_payload.get("voucherPosSave", [])
+                voucher_core = voucher_payload.get("voucher", {})
 
-            if validation_errors:
-                st.error("Payload validation failed:")
-                for error in validation_errors:
-                    st.write(f"- {error}")
-            else:
-                st.success("Payload validation passed.")
+                if index > 0:
+                    st.divider()
+                st.markdown(f"### {voucher_label}")
 
-            voucher_positions = voucher_payload.get("voucherPosSave", [])
-            voucher_core = voucher_payload.get("voucher", {})
-            if isinstance(voucher_core, dict):
-                st.markdown("**Essential Fields**")
-                st.json(
-                    {
-                        "description": voucher_core.get("description"),
-                        "sumGross": voucher_core.get("sumGross"),
-                        "voucherDate": voucher_core.get("voucherDate"),
-                    },
-                    expanded=False,
-                )
-                if isinstance(voucher_positions, list) and voucher_positions:
-                    split_rows = []
-                    for pos in voucher_positions:
-                        if not isinstance(pos, dict):
-                            continue
-                        split_rows.append(
-                            {
-                                "taxRate": pos.get("taxRate"),
-                                "sumGross": pos.get("sumGross"),
-                                "sumNet": pos.get("sumNet"),
-                                "comment": pos.get("comment"),
-                            }
-                        )
+                if upload_result.get("upload_error"):
+                    st.error(str(upload_result["upload_error"]))
+                if isinstance(upload_result.get("createdVoucher"), dict):
+                    created_voucher = upload_result["createdVoucher"]
+                    created_voucher_id = str(created_voucher.get("id", "")).strip()
+                    st.success(
+                        f"{voucher_label} uploaded successfully."
+                        + (f" New id: `{created_voucher_id}`." if created_voucher_id else "")
+                    )
+                    st.json(created_voucher, expanded=False)
 
-                    if split_rows:
-                        st.markdown("**Tax Split**")
-                        st.table(split_rows)
+                if validation_errors:
+                    st.error("Payload validation failed:")
+                    for error in validation_errors:
+                        st.write(f"- {error}")
+                else:
+                    st.success("Payload validation passed.")
 
-            st.markdown("**Prepared Voucher JSON**")
-            st.json(voucher_payload, expanded=False)
-
-            if st.button(
-                f"Upload {sheet_name} voucher to sevDesk",
-                key=f"monthly_umsatz_upload_{sheet_name}",
-                width="stretch",
-                disabled=bool(validation_errors),
-            ):
-                token = ensure_token()
-                if token:
-                    try:
-                        with st.spinner(f"Uploading {sheet_name} voucher to sevDesk..."):
-                            request_payload = normalize_create_payload(voucher_payload)
-                            response_payload = create_voucher(base_url(), token, request_payload)
-                            created_summary = first_object_from_response(response_payload) or {}
-                            created_voucher_id = str(created_summary.get("id", "")).strip()
-                            created_voucher = (
-                                request_voucher_by_id(base_url(), token, created_voucher_id)
-                                if created_voucher_id
-                                else None
+                if isinstance(voucher_core, dict):
+                    st.markdown("**Essential Fields**")
+                    st.json(
+                        {
+                            "description": voucher_core.get("description"),
+                            "sumGross": voucher_core.get("sumGross"),
+                            "voucherDate": voucher_core.get("voucherDate"),
+                            "creditDebit": voucher_core.get("creditDebit"),
+                        },
+                        expanded=False,
+                    )
+                    if isinstance(voucher_positions, list) and voucher_positions:
+                        split_rows = []
+                        for pos in voucher_positions:
+                            if not isinstance(pos, dict):
+                                continue
+                            split_rows.append(
+                                {
+                                    "taxRate": pos.get("taxRate"),
+                                    "sumGross": pos.get("sumGross"),
+                                    "sumNet": pos.get("sumNet"),
+                                    "comment": pos.get("comment"),
+                                }
                             )
-                        st.session_state[MONTHLY_UMSATZ_UPLOAD_RESULTS_STATE_KEY] = {
-                            **upload_results,
-                            sheet_name: {"createdVoucher": created_voucher or created_summary},
-                        }
-                        st.rerun()
-                    except Exception as exc:
-                        st.session_state[MONTHLY_UMSATZ_UPLOAD_RESULTS_STATE_KEY] = {
-                            **upload_results,
-                            sheet_name: {"upload_error": str(exc)},
-                        }
-                        st.rerun()
+
+                        if split_rows:
+                            st.markdown("**Tax Split**")
+                            st.table(split_rows)
+
+                st.markdown("**Prepared Voucher JSON**")
+                st.json(voucher_payload, expanded=False)
+
+                if st.button(
+                    f"Upload {voucher_label} for {sheet_name} to sevDesk",
+                    key=f"monthly_umsatz_upload_{sheet_name}_{voucher_kind}",
+                    width="stretch",
+                    disabled=bool(validation_errors),
+                ):
+                    token = ensure_token()
+                    if token:
+                        try:
+                            with st.spinner(f"Uploading {voucher_label} for {sheet_name} to sevDesk..."):
+                                request_payload = normalize_create_payload(voucher_payload)
+                                response_payload = create_voucher(base_url(), token, request_payload)
+                                created_summary = first_object_from_response(response_payload) or {}
+                                created_voucher_id = str(created_summary.get("id", "")).strip()
+                                created_voucher = (
+                                    request_voucher_by_id(base_url(), token, created_voucher_id)
+                                    if created_voucher_id
+                                    else None
+                                )
+                            sheet_results = upload_results.get(sheet_name, {})
+                            if not isinstance(sheet_results, dict):
+                                sheet_results = {}
+                            st.session_state[MONTHLY_UMSATZ_UPLOAD_RESULTS_STATE_KEY] = {
+                                **upload_results,
+                                sheet_name: {
+                                    **sheet_results,
+                                    voucher_kind: {"createdVoucher": created_voucher or created_summary},
+                                },
+                            }
+                            st.rerun()
+                        except Exception as exc:
+                            sheet_results = upload_results.get(sheet_name, {})
+                            if not isinstance(sheet_results, dict):
+                                sheet_results = {}
+                            st.session_state[MONTHLY_UMSATZ_UPLOAD_RESULTS_STATE_KEY] = {
+                                **upload_results,
+                                sheet_name: {
+                                    **sheet_results,
+                                    voucher_kind: {"upload_error": str(exc)},
+                                },
+                            }
+                            st.rerun()

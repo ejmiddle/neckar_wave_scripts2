@@ -1,13 +1,89 @@
 version: '3'
 
 tasks:
-  # Dev Streamlit apps
   default:
     desc: Show available tasks
     cmds:
       - task --list
 
-  install:
+  # Main Streamlit app
+  main_run:
+    desc: Run the main Streamlit app on port 8080
+    cmds:
+      - task: _streamlit_app
+        vars:
+          APP_ENTRYPOINT: apps/main.py
+          APP_PORT: '8080'
+    interactive: true
+
+  main_docker_build:
+    desc: Build the main Streamlit app image for GHCR
+    cmds:
+      - task: _docker_build_streamlit_app
+        vars:
+          APP_ENTRYPOINT: apps/main.py
+          IMAGE: ghcr.io/ejmiddle/neckarwave-main
+
+  main_docker_push:
+    desc: Push the main Streamlit app image and build cache to GHCR
+    cmds:
+      - task: _docker_push_streamlit_app
+        vars:
+          IMAGE: ghcr.io/ejmiddle/neckarwave-main
+
+  main_docker_publish:
+    desc: Build then push the main Streamlit app image
+    cmds:
+      - task: main_docker_build
+      - task: main_docker_push
+
+  main_docker_run:
+    desc: Run the main app container locally on port 8080 with live source mounts
+    cmds:
+      - task: main_docker_build
+      - docker run --rm --platform linux/amd64 --env-file .env -e STREAMLIT_APP_FILE=apps/main.py -e STREAMLIT_SERVER_PORT=8080 -p 8080:8080 -v "$(pwd)/apps:/app/apps" -v "$(pwd)/data:/app/data" -v "$(pwd)/src:/app/src" -v "$(pwd)/pages:/app/pages" -v "$(pwd)/streamlit_app.py:/app/streamlit_app.py:ro" -v "$(pwd)/.streamlit:/app/.streamlit:ro" -v "$(pwd)/logging.conf:/app/logging.conf:ro" ghcr.io/ejmiddle/neckarwave-main:latest
+    interactive: true
+
+  # Accounting Streamlit app
+  acc_run:
+    desc: Run the accounting Streamlit app on port 8081
+    cmds:
+      - task: _streamlit_app
+        vars:
+          APP_ENTRYPOINT: apps/accounting.py
+          APP_PORT: '8081'
+    interactive: true
+
+  acc_docker_build:
+    desc: Build the accounting Streamlit app image for GHCR
+    cmds:
+      - task: _docker_build_streamlit_app
+        vars:
+          APP_ENTRYPOINT: apps/accounting.py
+          IMAGE: ghcr.io/ejmiddle/neckarwave-accounting
+
+  acc_docker_push:
+    desc: Push the accounting Streamlit app image and build cache to GHCR
+    cmds:
+      - task: _docker_push_streamlit_app
+        vars:
+          IMAGE: ghcr.io/ejmiddle/neckarwave-accounting
+
+  acc_docker_publish:
+    desc: Build then push the accounting Streamlit app image
+    cmds:
+      - task: acc_docker_build
+      - task: acc_docker_push
+
+  acc_docker_run:
+    desc: Run the accounting app container locally on port 8081 with live source mounts
+    cmds:
+      - task: acc_docker_build
+      - docker run --rm --platform linux/amd64 --env-file .env -e STREAMLIT_APP_FILE=apps/accounting.py -e STREAMLIT_SERVER_PORT=8080 -p 8081:8080 -v "$(pwd)/apps:/app/apps" -v "$(pwd)/data:/app/data" -v "$(pwd)/src:/app/src" -v "$(pwd)/pages:/app/pages" -v "$(pwd)/streamlit_app.py:/app/streamlit_app.py:ro" -v "$(pwd)/.streamlit:/app/.streamlit:ro" -v "$(pwd)/logging.conf:/app/logging.conf:ro" ghcr.io/ejmiddle/neckarwave-accounting:latest
+    interactive: true
+
+  # Dev and utility tasks
+  dev_install:
     desc: Install dependencies using uv
     cmds:
       - UV_CACHE_DIR=.uv-cache uv sync
@@ -17,128 +93,98 @@ tasks:
 
   _streamlit_app:
     internal: true
-    deps: [install]
+    deps: [dev_install]
     cmds:
       - sh -c 'if [ -f .env ]; then set -a; . ./.env; set +a; fi; UV_CACHE_DIR=.uv-cache uv run streamlit run {{.APP_ENTRYPOINT}} --server.port {{.APP_PORT}} --browser.serverPort {{.APP_PORT}}'
 
-  dev_app_main:
-    desc: Run the main Streamlit app on port 8080
-    cmds:
-      - task: _streamlit_app
-        vars:
-          APP_ENTRYPOINT: apps/main.py
-          APP_PORT: '8080'
-    interactive: true
-
-  dev_app_accounting:
-    desc: Run the accounting Streamlit app on port 8081
-    cmds:
-      - task: _streamlit_app
-        vars:
-          APP_ENTRYPOINT: apps/accounting.py
-          APP_PORT: '8081'
-    interactive: true
-
-  runapp:
-    desc: Deprecated alias for `dev_app_main`
-    cmds:
-      - task: dev_app_main
-    interactive: true
-
-  # Other tasks
-  api_run:
+  dev_api_run:
     desc: Run FastAPI image API on port 8000
-    deps: [install]
+    deps: [dev_install]
     cmds:
       - set -a; source .env; set +a; UV_CACHE_DIR=.uv-cache uv run uvicorn fastapi_app:app --host 0.0.0.0 --port 8000
     interactive: true
 
-  api_dev:
+  dev_api_dev:
     desc: Run FastAPI image API with auto-reload
-    deps: [install]
+    deps: [dev_install]
     cmds:
       - set -a; source .env; set +a; UV_CACHE_DIR=.uv-cache uv run uvicorn fastapi_app:app --host 0.0.0.0 --port 8000 --reload
     interactive: true
 
-  api_tls_cert:
+  dev_api_tls_cert:
     desc: Create local self-signed TLS cert for HTTPS API testing
     cmds:
       - mkdir -p certs
       - openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout certs/localhost-key.pem -out certs/localhost.pem -subj "/CN=localhost"
 
-  api_run_https:
+  dev_api_run_https:
     desc: Run FastAPI image API over HTTPS on port 8443
-    deps: [install]
+    deps: [dev_install]
     cmds:
       - set -a; source .env; set +a; UV_CACHE_DIR=.uv-cache uv run uvicorn fastapi_app:app --host 0.0.0.0 --port 8443 --ssl-keyfile certs/localhost-key.pem --ssl-certfile certs/localhost.pem
     interactive: true
 
-  api_dev_https:
+  dev_api_dev_https:
     desc: Run FastAPI image API over HTTPS with auto-reload on port 8443
-    deps: [install]
+    deps: [dev_install]
     cmds:
       - set -a; source .env; set +a; UV_CACHE_DIR=.uv-cache uv run uvicorn fastapi_app:app --host 0.0.0.0 --port 8443 --reload --ssl-keyfile certs/localhost-key.pem --ssl-certfile certs/localhost.pem
     interactive: true
 
-  api_health:
+  dev_api_health:
     desc: Check local API health endpoint
     cmds:
       - curl -fsS http://localhost:8000/health
 
-  api_health_https:
+  dev_api_health_https:
     desc: Check local HTTPS API health endpoint
     cmds:
       - curl -k -fsS https://localhost:8443/health
 
-  containers_up:
+  dev_containers_up:
     desc: Start backend container stack (qdrant + fastapi) for local integration
     cmds:
       - docker network inspect neckarwave_net >/dev/null 2>&1 || docker network create neckarwave_net
       - docker rm -f nw_qdrant >/dev/null 2>&1 || true
       - docker run --rm -d --name nw_qdrant --network neckarwave_net -p 6333:6333 -p 6334:6334 -v "$(pwd)/qdrant_storage:/qdrant/storage" qdrant/qdrant:latest
-      - task docker_build_fastapi_amd64
+      - task dev_docker_build_fastapi_amd64
       - docker rm -f nw_fastapi >/dev/null 2>&1 || true
       - docker run --rm -d --name nw_fastapi --network neckarwave_net --env-file .env -e QDRANT_URL=http://nw_qdrant:6333 -p 8000:8000 ghcr.io/ejmiddle/fastapi-backend:latest
 
-  containers_down:
+  dev_containers_down:
     desc: Stop backend container stack (qdrant + fastapi)
     cmds:
       - docker stop nw_fastapi >/dev/null 2>&1 || true
       - docker stop nw_qdrant >/dev/null 2>&1 || true
 
-  containers_ps:
+  dev_containers_ps:
     desc: Show running project containers
     cmds:
       - docker ps --filter "name=nw_fastapi" --filter "name=nw_qdrant"
 
-  containers_logs_fastapi:
+  dev_containers_logs_fastapi:
     desc: Follow logs from FastAPI backend container
     cmds:
       - docker logs -f nw_fastapi
 
-  containers_logs_qdrant:
+  dev_containers_logs_qdrant:
     desc: Follow logs from Qdrant backend container
     cmds:
       - docker logs -f nw_qdrant
 
-  ping_test_internet:
+  dev_ping_test_internet:
     desc: Run the internet ping test script
-    deps: [install]
+    deps: [dev_install]
     cmds:
       - UV_CACHE_DIR=.uv-cache uv run python scripts/ping_test_internet.py monitor
 
-  ping_test_internet_plot:
+  dev_ping_test_internet_plot:
     desc: Plot results from the internet ping test logfile
-    deps: [install]
+    deps: [dev_install]
     cmds:
       - UV_CACHE_DIR=.uv-cache uv run python scripts/ping_test_internet.py plot
 
-  clean:
-    desc: Alias for `cache_clear`
-    cmds:
-      - task: cache_clear
-
-  cache_clear:
+  dev_clean:
     desc: Clear local uv, Streamlit, and Python caches
     cmds:
       - rm -rf .uv-cache .streamlit/cache .pytest_cache .mypy_cache
@@ -157,177 +203,310 @@ tasks:
       - sh -c 'if [ "${DOCKER_BUILD_REGISTRY_CACHE:-0}" = "1" ]; then docker push {{.IMAGE}}:buildcache; fi'
       - echo 'Tip-> source .env && echo "$GHCR_TOKEN" | docker login ghcr.io -u ejmiddle --password-stdin'
 
-  dev_docker_build_main_app:
-    desc: Build the main Streamlit app image for GHCR
-    cmds:
-      - task: _docker_build_streamlit_app
-        vars:
-          APP_ENTRYPOINT: apps/main.py
-          IMAGE: ghcr.io/ejmiddle/neckarwave-main
-
-  dev_docker_push_main_app:
-    desc: Push the main Streamlit app image and build cache to GHCR
-    cmds:
-      - task: _docker_push_streamlit_app
-        vars:
-          IMAGE: ghcr.io/ejmiddle/neckarwave-main
-
-  dev_docker_publish_main_app:
-    desc: Build then push the main Streamlit app image
-    cmds:
-      - task: dev_docker_build_main_app
-      - task: dev_docker_push_main_app
-
-  dev_docker_run_main_app:
-    desc: Run the main app container locally on port 8080 with live source mounts
-    cmds:
-      - task: dev_docker_build_main_app
-      - docker run --rm --platform linux/amd64 --env-file .env -e STREAMLIT_APP_FILE=apps/main.py -e STREAMLIT_SERVER_PORT=8080 -p 8080:8080 -v "$(pwd)/apps:/app/apps" -v "$(pwd)/data:/app/data" -v "$(pwd)/src:/app/src" -v "$(pwd)/pages:/app/pages" -v "$(pwd)/streamlit_app.py:/app/streamlit_app.py:ro" -v "$(pwd)/.streamlit:/app/.streamlit:ro" -v "$(pwd)/logging.conf:/app/logging.conf:ro" ghcr.io/ejmiddle/neckarwave-main:latest
-    interactive: true
-
-  dev_docker_build_accounting_app:
-    desc: Build the accounting Streamlit app image for GHCR
-    cmds:
-      - task: _docker_build_streamlit_app
-        vars:
-          APP_ENTRYPOINT: apps/accounting.py
-          IMAGE: ghcr.io/ejmiddle/neckarwave-accounting
-
-  dev_docker_push_accounting_app:
-    desc: Push the accounting Streamlit app image and build cache to GHCR
-    cmds:
-      - task: _docker_push_streamlit_app
-        vars:
-          IMAGE: ghcr.io/ejmiddle/neckarwave-accounting
-
-  dev_docker_publish_accounting_app:
-    desc: Build then push the accounting Streamlit app image
-    cmds:
-      - task: dev_docker_build_accounting_app
-      - task: dev_docker_push_accounting_app
-
-  dev_docker_run_accounting_app:
-    desc: Run the accounting app container locally on port 8081 with live source mounts
-    cmds:
-      - task: dev_docker_build_accounting_app
-      - docker run --rm --platform linux/amd64 --env-file .env -e STREAMLIT_APP_FILE=apps/accounting.py -e STREAMLIT_SERVER_PORT=8080 -p 8081:8080 -v "$(pwd)/apps:/app/apps" -v "$(pwd)/data:/app/data" -v "$(pwd)/src:/app/src" -v "$(pwd)/pages:/app/pages" -v "$(pwd)/streamlit_app.py:/app/streamlit_app.py:ro" -v "$(pwd)/.streamlit:/app/.streamlit:ro" -v "$(pwd)/logging.conf:/app/logging.conf:ro" ghcr.io/ejmiddle/neckarwave-accounting:latest
-    interactive: true
-
-  # Deprecated compatibility aliases
-  app_main:
-    desc: Deprecated alias for `dev_app_main`
-    cmds:
-      - task: dev_app_main
-
-  app_accounting:
-    desc: Deprecated alias for `dev_app_accounting`
-    cmds:
-      - task: dev_app_accounting
-
-  docker_build_app:
-    desc: Deprecated alias for `dev_docker_build_main_app`
-    cmds:
-      - task: dev_docker_build_main_app
-
-  docker_push_app:
-    desc: Deprecated alias for `dev_docker_push_main_app`
-    cmds:
-      - task: dev_docker_push_main_app
-
-  docker_run_app:
-    desc: Deprecated alias for `dev_docker_run_main_app`
-    cmds:
-      - task: dev_docker_run_main_app
-    interactive: true
-
-  docker_build_main_app:
-    desc: Deprecated alias for `dev_docker_build_main_app`
-    cmds:
-      - task: dev_docker_build_main_app
-
-  docker_push_main_app:
-    desc: Deprecated alias for `dev_docker_push_main_app`
-    cmds:
-      - task: dev_docker_push_main_app
-
-  docker_publish_main_app:
-    desc: Deprecated alias for `dev_docker_publish_main_app`
-    cmds:
-      - task: dev_docker_publish_main_app
-
-  docker_run_main_app:
-    desc: Deprecated alias for `dev_docker_run_main_app`
-    cmds:
-      - task: dev_docker_run_main_app
-    interactive: true
-
-  docker_build_accounting_app:
-    desc: Deprecated alias for `dev_docker_build_accounting_app`
-    cmds:
-      - task: dev_docker_build_accounting_app
-
-  docker_push_accounting_app:
-    desc: Deprecated alias for `dev_docker_push_accounting_app`
-    cmds:
-      - task: dev_docker_push_accounting_app
-
-  docker_publish_accounting_app:
-    desc: Deprecated alias for `dev_docker_publish_accounting_app`
-    cmds:
-      - task: dev_docker_publish_accounting_app
-
-  docker_run_accounting_app:
-    desc: Deprecated alias for `dev_docker_run_accounting_app`
-    cmds:
-      - task: dev_docker_run_accounting_app
-    interactive: true
-
-  docker_build_fastapi_amd64:
+  dev_docker_build_fastapi_amd64:
     desc: Build amd64 FastAPI backend image
     cmds:
       - sh -c 'if [ "${DOCKER_BUILD_REGISTRY_CACHE:-0}" = "1" ]; then docker buildx build --platform linux/amd64 --cache-from type=registry,ref=ghcr.io/ejmiddle/fastapi-backend:buildcache --cache-to type=registry,ref=ghcr.io/ejmiddle/fastapi-backend:buildcache,mode=max -t ghcr.io/ejmiddle/fastapi-backend:latest --load -f Dockerfile.fastapi .; else docker buildx build --platform linux/amd64 -t ghcr.io/ejmiddle/fastapi-backend:latest --load -f Dockerfile.fastapi .; fi'
 
-  docker_push_fastapi:
+  dev_docker_push_fastapi:
     desc: Push FastAPI backend image and build cache to GHCR
     cmds:
       - docker push ghcr.io/ejmiddle/fastapi-backend:latest
       - sh -c 'if [ "${DOCKER_BUILD_REGISTRY_CACHE:-0}" = "1" ]; then docker push ghcr.io/ejmiddle/fastapi-backend:buildcache; fi'
 
-  docker_publish_fastapi:
+  dev_docker_publish_fastapi:
     desc: Build then push FastAPI backend image to GHCR
     cmds:
-      - task docker_build_fastapi_amd64
-      - task docker_push_fastapi
+      - task dev_docker_build_fastapi_amd64
+      - task dev_docker_push_fastapi
 
-  api_run_publish:
+  dev_api_run_publish:
     desc: Build then push image for api_run deployment
     cmds:
-      - task docker_publish_fastapi
+      - task dev_docker_publish_fastapi
 
-  docker_run_fastapi:
+  dev_docker_run_fastapi:
     desc: Run the FastAPI backend container locally for testing
-    deps: [docker_build_fastapi_amd64]
+    deps: [dev_docker_build_fastapi_amd64]
     cmds:
       - docker run --rm --platform linux/amd64 --env-file .env -p 8000:8000 ghcr.io/ejmiddle/fastapi-backend:latest
     interactive: true
 
-  qdrant_up:
+  dev_qdrant_up:
     desc: Start a local Qdrant server (latest stable)
     cmds:
       - mkdir -p qdrant_storage
       - docker run --rm -d --name qdrant -p 6333:6333 -p 6334:6334 -v "$(pwd)/qdrant_storage:/qdrant/storage" qdrant/qdrant:latest
 
-  qdrant_down:
+  dev_qdrant_down:
     desc: Stop the local Qdrant server
     cmds:
       - docker stop qdrant
 
-  qdrant_logs:
+  dev_qdrant_logs:
     desc: Follow logs from the local Qdrant server
     cmds:
       - docker logs -f qdrant
 
-  qdrant_test:
+  dev_qdrant_test:
     desc: Test the local Qdrant server health endpoint
     cmds:
       - python3 scripts/test_qdrant.py
+
+  # Deprecated compatibility aliases
+  install:
+    desc: Deprecated alias for `dev_install`
+    cmds:
+      - task dev_install
+
+  runapp:
+    desc: Deprecated alias for `main_run`
+    cmds:
+      - task main_run
+
+  app_main:
+    desc: Deprecated alias for `main_run`
+    cmds:
+      - task main_run
+
+  app_accounting:
+    desc: Deprecated alias for `acc_run`
+    cmds:
+      - task acc_run
+
+  api_run:
+    desc: Deprecated alias for `dev_api_run`
+    cmds:
+      - task dev_api_run
+
+  api_dev:
+    desc: Deprecated alias for `dev_api_dev`
+    cmds:
+      - task dev_api_dev
+
+  api_tls_cert:
+    desc: Deprecated alias for `dev_api_tls_cert`
+    cmds:
+      - task dev_api_tls_cert
+
+  api_run_https:
+    desc: Deprecated alias for `dev_api_run_https`
+    cmds:
+      - task dev_api_run_https
+
+  api_dev_https:
+    desc: Deprecated alias for `dev_api_dev_https`
+    cmds:
+      - task dev_api_dev_https
+
+  api_health:
+    desc: Deprecated alias for `dev_api_health`
+    cmds:
+      - task dev_api_health
+
+  api_health_https:
+    desc: Deprecated alias for `dev_api_health_https`
+    cmds:
+      - task dev_api_health_https
+
+  containers_up:
+    desc: Deprecated alias for `dev_containers_up`
+    cmds:
+      - task dev_containers_up
+
+  containers_down:
+    desc: Deprecated alias for `dev_containers_down`
+    cmds:
+      - task dev_containers_down
+
+  containers_ps:
+    desc: Deprecated alias for `dev_containers_ps`
+    cmds:
+      - task dev_containers_ps
+
+  containers_logs_fastapi:
+    desc: Deprecated alias for `dev_containers_logs_fastapi`
+    cmds:
+      - task dev_containers_logs_fastapi
+
+  containers_logs_qdrant:
+    desc: Deprecated alias for `dev_containers_logs_qdrant`
+    cmds:
+      - task dev_containers_logs_qdrant
+
+  ping_test_internet:
+    desc: Deprecated alias for `dev_ping_test_internet`
+    cmds:
+      - task dev_ping_test_internet
+
+  ping_test_internet_plot:
+    desc: Deprecated alias for `dev_ping_test_internet_plot`
+    cmds:
+      - task dev_ping_test_internet_plot
+
+  clean:
+    desc: Deprecated alias for `dev_clean`
+    cmds:
+      - task dev_clean
+
+  cache_clear:
+    desc: Deprecated alias for `dev_clean`
+    cmds:
+      - task dev_clean
+
+  dev_app_main:
+    desc: Deprecated alias for `main_run`
+    cmds:
+      - task main_run
+
+  dev_app_accounting:
+    desc: Deprecated alias for `acc_run`
+    cmds:
+      - task acc_run
+
+  dev_docker_build_main_app:
+    desc: Deprecated alias for `main_docker_build`
+    cmds:
+      - task main_docker_build
+
+  dev_docker_push_main_app:
+    desc: Deprecated alias for `main_docker_push`
+    cmds:
+      - task main_docker_push
+
+  dev_docker_publish_main_app:
+    desc: Deprecated alias for `main_docker_publish`
+    cmds:
+      - task main_docker_publish
+
+  dev_docker_run_main_app:
+    desc: Deprecated alias for `main_docker_run`
+    cmds:
+      - task main_docker_run
+    interactive: true
+
+  dev_docker_build_accounting_app:
+    desc: Deprecated alias for `acc_docker_build`
+    cmds:
+      - task acc_docker_build
+
+  dev_docker_push_accounting_app:
+    desc: Deprecated alias for `acc_docker_push`
+    cmds:
+      - task acc_docker_push
+
+  dev_docker_publish_accounting_app:
+    desc: Deprecated alias for `acc_docker_publish`
+    cmds:
+      - task acc_docker_publish
+
+  dev_docker_run_accounting_app:
+    desc: Deprecated alias for `acc_docker_run`
+    cmds:
+      - task acc_docker_run
+    interactive: true
+
+  docker_build_app:
+    desc: Deprecated alias for `main_docker_build`
+    cmds:
+      - task main_docker_build
+
+  docker_push_app:
+    desc: Deprecated alias for `main_docker_push`
+    cmds:
+      - task main_docker_push
+
+  docker_run_app:
+    desc: Deprecated alias for `main_docker_run`
+    cmds:
+      - task main_docker_run
+    interactive: true
+
+  docker_build_main_app:
+    desc: Deprecated alias for `main_docker_build`
+    cmds:
+      - task main_docker_build
+
+  docker_push_main_app:
+    desc: Deprecated alias for `main_docker_push`
+    cmds:
+      - task main_docker_push
+
+  docker_publish_main_app:
+    desc: Deprecated alias for `main_docker_publish`
+    cmds:
+      - task main_docker_publish
+
+  docker_run_main_app:
+    desc: Deprecated alias for `main_docker_run`
+    cmds:
+      - task main_docker_run
+    interactive: true
+
+  docker_build_accounting_app:
+    desc: Deprecated alias for `acc_docker_build`
+    cmds:
+      - task acc_docker_build
+
+  docker_push_accounting_app:
+    desc: Deprecated alias for `acc_docker_push`
+    cmds:
+      - task acc_docker_push
+
+  docker_publish_accounting_app:
+    desc: Deprecated alias for `acc_docker_publish`
+    cmds:
+      - task acc_docker_publish
+
+  docker_run_accounting_app:
+    desc: Deprecated alias for `acc_docker_run`
+    cmds:
+      - task acc_docker_run
+    interactive: true
+
+  docker_build_fastapi_amd64:
+    desc: Deprecated alias for `dev_docker_build_fastapi_amd64`
+    cmds:
+      - task dev_docker_build_fastapi_amd64
+
+  docker_push_fastapi:
+    desc: Deprecated alias for `dev_docker_push_fastapi`
+    cmds:
+      - task dev_docker_push_fastapi
+
+  docker_publish_fastapi:
+    desc: Deprecated alias for `dev_docker_publish_fastapi`
+    cmds:
+      - task dev_docker_publish_fastapi
+
+  api_run_publish:
+    desc: Deprecated alias for `dev_api_run_publish`
+    cmds:
+      - task dev_api_run_publish
+
+  docker_run_fastapi:
+    desc: Deprecated alias for `dev_docker_run_fastapi`
+    deps: [dev_docker_build_fastapi_amd64]
+    cmds:
+      - task dev_docker_run_fastapi
+    interactive: true
+
+  qdrant_up:
+    desc: Deprecated alias for `dev_qdrant_up`
+    cmds:
+      - task dev_qdrant_up
+
+  qdrant_down:
+    desc: Deprecated alias for `dev_qdrant_down`
+    cmds:
+      - task dev_qdrant_down
+
+  qdrant_logs:
+    desc: Deprecated alias for `dev_qdrant_logs`
+    cmds:
+      - task dev_qdrant_logs
+
+  qdrant_test:
+    desc: Deprecated alias for `dev_qdrant_test`
+    cmds:
+      - task dev_qdrant_test

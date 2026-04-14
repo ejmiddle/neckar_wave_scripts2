@@ -1,4 +1,3 @@
-from src.accounting.page import render_accounting_app
+from src.streamlit_apps.accounting_app import main
 
-
-render_accounting_app()
+main()

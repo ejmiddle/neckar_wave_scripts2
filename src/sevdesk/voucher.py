@@ -222,6 +222,125 @@ def check_account_ref_from_zahlungskonto(row: dict[str, Any] | None) -> dict[str
     return None
 
 
+def _extract_voucher_update_source(
+    existing_voucher: dict[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    voucher: dict[str, Any]
+    positions: list[dict[str, Any]] = []
+
+    nested_voucher = existing_voucher.get("voucher")
+    if isinstance(nested_voucher, dict):
+        voucher = nested_voucher
+        for key in ("voucherPos", "voucherPosSave"):
+            nested_positions = existing_voucher.get(key)
+            if isinstance(nested_positions, list):
+                positions = [item for item in nested_positions if isinstance(item, dict)]
+                break
+    else:
+        voucher = existing_voucher
+        for key in ("voucherPos", "voucherPosSave"):
+            nested_positions = existing_voucher.get(key)
+            if isinstance(nested_positions, list):
+                positions = [item for item in nested_positions if isinstance(item, dict)]
+                break
+
+    if not positions:
+        for key in ("voucherPos", "voucherPosSave"):
+            nested_positions = voucher.get(key)
+            if isinstance(nested_positions, list):
+                positions = [item for item in nested_positions if isinstance(item, dict)]
+                break
+
+    return voucher, positions
+
+
+def _clean_voucher_for_update(voucher: dict[str, Any]) -> dict[str, Any]:
+    cleaned = deepcopy(voucher)
+    for key in (
+        "create",
+        "update",
+        "sevClient",
+        "createUser",
+        "updateUser",
+        "voucherPos",
+        "voucherPosSave",
+        "voucherPosDelete",
+    ):
+        cleaned.pop(key, None)
+    cleaned.setdefault("objectName", "Voucher")
+    cleaned.setdefault("mapAll", True)
+    return cleaned
+
+
+def _clean_voucher_pos_for_update(
+    position: dict[str, Any],
+    accounting_type_ref: dict[str, Any],
+) -> dict[str, Any]:
+    cleaned = deepcopy(position)
+    for key in ("create", "update", "sevClient", "voucher"):
+        cleaned.pop(key, None)
+    cleaned["accountingType"] = deepcopy(accounting_type_ref)
+    cleaned.setdefault("objectName", "VoucherPos")
+    cleaned.setdefault("mapAll", True)
+    return cleaned
+
+
+def build_voucher_accounting_type_update_payload(
+    existing_voucher: dict[str, Any],
+    accounting_type: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not isinstance(existing_voucher, dict):
+        raise RuntimeError("Existing voucher payload must be an object.")
+
+    accounting_type_ref = accounting_type_ref_from_buchunggskonto(accounting_type)
+    accounting_type_id = str(accounting_type_ref.get("id", "")).strip()
+    if not accounting_type_id:
+        raise RuntimeError("Selected accounting type has no id.")
+
+    voucher, positions = _extract_voucher_update_source(existing_voucher)
+    if not positions:
+        raise RuntimeError("Voucher does not contain any positions that can be updated.")
+
+    cleaned_positions = [
+        _clean_voucher_pos_for_update(position, accounting_type_ref)
+        for position in positions
+    ]
+    if not cleaned_positions:
+        raise RuntimeError("Voucher does not contain any usable positions that can be updated.")
+
+    voucher_payload = _clean_voucher_for_update(voucher)
+    voucher_id = str(voucher_payload.get("id", "")).strip()
+    if not voucher_id:
+        raise RuntimeError("Existing voucher payload is missing an id.")
+    voucher_payload["id"] = voucher_id
+
+    return {
+        "voucher": voucher_payload,
+        "voucherPosSave": cleaned_positions,
+        "voucherPosDelete": None,
+        "filename": None,
+    }
+
+
+def extract_voucher_accounting_type_ids(existing_voucher: dict[str, Any]) -> list[str]:
+    if not isinstance(existing_voucher, dict):
+        return []
+
+    _, positions = _extract_voucher_update_source(existing_voucher)
+    accounting_type_ids: list[str] = []
+    seen_ids: set[str] = set()
+    for position in positions:
+        accounting_type = position.get("accountingType")
+        if not isinstance(accounting_type, dict):
+            continue
+        accounting_type_id = str(accounting_type.get("id", "")).strip()
+        if not accounting_type_id or accounting_type_id in seen_ids:
+            continue
+        seen_ids.add(accounting_type_id)
+        accounting_type_ids.append(accounting_type_id)
+    return accounting_type_ids
+
+
 def today_str() -> str:
     return date.today().strftime("%d.%m.%Y")
 

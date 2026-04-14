@@ -11,6 +11,7 @@ DEFAULT_SYSTEM_PROMPT = (
     "Arbeite strikt faktisch: keine Annahmen, keine Erfindungen. "
     "Nutze ausschliesslich Informationen, die auf dem Dokument klar erkennbar sind. "
     "Wenn ein Feld nicht sicher belegt ist, gib null zurueck. "
+    "Wenn ein PDF mehrere Seiten hat, behandle standardmaessig jede Seite als eigenen einzelnen Beleg. "
     "amount ist der Bruttogesamtbetrag in EUR. "
     "vat_rate_percent darf nur 19, 7 oder 0 sein. "
     "purchase_category darf nur 'Sonstiges Material' oder 'Bürobedarf' sein. "
@@ -21,7 +22,8 @@ DEFAULT_SYSTEM_PROMPT = (
 )
 DEFAULT_IMAGE_USER_PROMPT = (
     "Analysiere alle Seiten des Amazon-Belegs und extrahiere die wichtigsten "
-    "Buchhaltungsfelder. invoice_date muss als YYYY-MM-DD ausgegeben werden."
+    "Buchhaltungsfelder. Wenn mehrere Seiten vorhanden sind, behandle standardmaessig "
+    "jede Seite als eigenen Beleg. invoice_date muss als YYYY-MM-DD ausgegeben werden."
 )
 
 PURCHASE_CATEGORIES = ("Sonstiges Material", "Bürobedarf")

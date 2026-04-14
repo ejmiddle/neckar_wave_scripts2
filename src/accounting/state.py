@@ -6,6 +6,7 @@ import streamlit as st
 
 ACCOUNTING_TYPES_EXPORT_PATH = Path("data/sevdesk/master_data/accounting_types.json")
 CHECK_ACCOUNTS_EXPORT_PATH = Path("data/sevdesk/master_data/checkaccounts.json")
+PRODUCTS_EXPORT_PATH = Path("data/sevdesk/master_data/products.json")
 TAX_RULES_EXPORT_PATH = Path("data/sevdesk/master_data/tax_rules.json")
 TAX_SETS_EXPORT_PATH = Path("data/sevdesk/master_data/tax_sets.json")
 SEVDESK_CACHE_DIR = Path("data/sevdesk/cache")
@@ -13,7 +14,10 @@ AMAZON_RECEIPTS_DIR = Path("data/sevdesk/Amazon_Belege")
 AMAZON_VOUCHER_OUTPUT_DIR = Path("data/sevdesk/amazon_voucher_payloads")
 
 SPARKASSE_NAME_FRAGMENT = "Sparkasse"
-AMAZON_PAYEE_NAME = "AMAZON PAYMENTS EUROPE S.C.A."
+AMAZON_PAYEE_NAME = (
+    "AMAZON PAYMENTS",
+    "AMAZON EU",
+)
 AMAZON_DEFAULT_CUSTOMER_NAME = "Amazon EU - DE"
 
 TRANSACTION_STATUS_LABELS = {
@@ -49,6 +53,11 @@ AMAZON_CUSTOMERS_SESSION_KEY = "sevdesk_amazon_customers_rows"
 def clear_amazon_analysis_state() -> None:
     for key in AMAZON_ANALYSIS_SESSION_KEYS:
         st.session_state.pop(key, None)
+
+
+def matches_amazon_payee_name(value: Any) -> bool:
+    haystack = str(value or "").casefold()
+    return any(fragment.casefold() in haystack for fragment in AMAZON_PAYEE_NAME)
 
 
 def bootstrap_accounting_state(refresh_live_amazon_customers: Callable[[], Any]) -> None:

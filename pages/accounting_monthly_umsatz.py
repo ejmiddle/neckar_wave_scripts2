@@ -1,0 +1,4 @@
+from src.accounting.page import render_accounting_monthly_umsatz_page
+
+
+render_accounting_monthly_umsatz_page()

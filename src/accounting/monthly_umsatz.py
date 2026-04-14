@@ -5,9 +5,12 @@ from copy import deepcopy
 from datetime import date, timedelta
 from io import BytesIO
 from pathlib import Path
+import re
 from typing import BinaryIO
 
 from openpyxl import load_workbook
+
+from src.sevdesk.voucher import normalize_create_payload
 
 DEFAULT_SHEETS = ("ALT", "WIE")
 EXPECTED_HEADER = (
@@ -20,6 +23,7 @@ EXPECTED_SHEET_MARKERS = {
     "summe_umsatz_label": ("SUMME Umsatz", 4, 1),
     "voucher_verkauft_label": ("Voucher verkauft", 8, 1),
     "voucher_summe_label": ("Voucher Summe", 9, 1),
+    "voucher_eingeloest_label": ("VOUCHER EINLÖS", 17, 1),
     "trinkgeld_label": ("Trinkgeld", 11, 1),
     "summe_umsatz_trinkgeld_label": ("SUMME Umsatz + Trinkgeld", 12, 1),
     "umsatz_7_label": ("Umsatz 7%", 2, 5),
@@ -30,7 +34,27 @@ TARGET_RATES = ("0", "7", "19")
 VOUCHER_RATES = ("7", "19")
 REVENUE_TAX_RULE = {"id": 1, "objectName": "TaxRule"}
 TEMPLATE_PATH = Path("data/sevdesk/templates/umsatz_voucher_template.json")
+VOUCHER_SOLD_TEMPLATE_PATH = Path("data/sevdesk/templates/voucher_verkauft_voucher_template.json")
+VOUCHER_REDEEMED_TEMPLATE_PATH = Path(
+    "data/sevdesk/templates/voucher_eingeloest_voucher_template.json"
+)
 DEFAULT_REVENUE_ACCOUNTING_TYPE_NAME = "Einnahmen / Erlöse / Verkäufe"
+DEFAULT_VOUCHER_ACCOUNTING_TYPE_NAME = "Verrechnungskonto Gutscheine"
+MONTHLY_VOUCHER_TEMPLATE_MAP = {
+    "voucher_verkauft": {
+        "template_path": VOUCHER_SOLD_TEMPLATE_PATH,
+        "description_prefix": "Voucher verkauft",
+        "credit_debit": "D",
+        "amount_key": "voucher_verkauft",
+    },
+    "voucher_eingeloest": {
+        "template_path": VOUCHER_REDEEMED_TEMPLATE_PATH,
+        "description_prefix": "Voucher eingelöst",
+        "credit_debit": "C",
+        "amount_key": "voucher_eingeloest",
+    },
+}
+PLACEHOLDER_RE = re.compile(r"^\{\{\s*([a-zA-Z0-9_]+)\s*\}\}$")
 
 
 class MonthlyUmsatzFormatError(ValueError):
@@ -138,6 +162,24 @@ def _extract_sheet_values(sheet_name: str, worksheet: object) -> tuple[dict[str,
         values[f"umsatz_{expected_rate}_prozent"] = float(amount)
         row_idx += 1
 
+    voucher_sold_row = header_row + EXPECTED_SHEET_MARKERS["voucher_verkauft_label"][1]
+    voucher_sold_amount = worksheet.cell(row=voucher_sold_row, column=2).value
+    if not isinstance(voucher_sold_amount, (int, float)):
+        raise MonthlyUmsatzFormatError(
+            f"Sheet '{sheet_name}' is not in the expected format: expected numeric Voucher "
+            f"verkauft value in row {voucher_sold_row}, got {voucher_sold_amount!r}"
+        )
+    values["voucher_verkauft"] = float(voucher_sold_amount)
+
+    voucher_eingeloest_row = header_row + EXPECTED_SHEET_MARKERS["voucher_eingeloest_label"][1]
+    voucher_eingeloest_amount = worksheet.cell(row=voucher_eingeloest_row, column=2).value
+    if not isinstance(voucher_eingeloest_amount, (int, float)):
+        raise MonthlyUmsatzFormatError(
+            f"Sheet '{sheet_name}' is not in the expected format: expected numeric Voucher "
+            f"eingelöst value in row {voucher_eingeloest_row}, got {voucher_eingeloest_amount!r}"
+        )
+    values["voucher_eingeloest"] = float(voucher_eingeloest_amount)
+
     return values, signature
 
 
@@ -231,6 +273,41 @@ def _load_voucher_template() -> dict[str, object]:
     return payload
 
 
+def _load_template(template_path: Path) -> dict[str, object]:
+    if not template_path.exists():
+        raise MonthlyUmsatzFormatError(f"Voucher template not found: {template_path}")
+
+    try:
+        payload = json.loads(template_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise MonthlyUmsatzFormatError(f"Voucher template JSON is invalid: {exc}") from exc
+
+    if not isinstance(payload, dict):
+        raise MonthlyUmsatzFormatError("Voucher template must be a JSON object")
+    return payload
+
+
+def _render_template_value(value: object, context: dict[str, object]) -> object:
+    if isinstance(value, str):
+        match = PLACEHOLDER_RE.match(value.strip())
+        if match:
+            return context.get(match.group(1))
+        return value
+    if isinstance(value, list):
+        return [_render_template_value(item, context) for item in value]
+    if isinstance(value, dict):
+        return {key: _render_template_value(item, context) for key, item in value.items()}
+    return value
+
+
+def _render_template_payload(template_path: Path, context: dict[str, object]) -> dict[str, object]:
+    template = _load_template(template_path)
+    rendered = _render_template_value(template, context)
+    if not isinstance(rendered, dict):
+        raise MonthlyUmsatzFormatError(f"Rendered voucher template is not an object: {template_path}")
+    return rendered
+
+
 def _select_default_revenue_accounting_type(
     accounting_type_rows: list[dict[str, object]] | None,
 ) -> dict[str, str]:
@@ -242,17 +319,123 @@ def _select_default_revenue_accounting_type(
     return {"id": "26", "objectName": "AccountingType"}
 
 
+def _select_default_voucher_accounting_type(
+    accounting_type_rows: list[dict[str, object]] | None,
+) -> dict[str, str]:
+    if accounting_type_rows:
+        for row in accounting_type_rows:
+            if str(row.get("name", "")).strip() == DEFAULT_VOUCHER_ACCOUNTING_TYPE_NAME:
+                return {"id": str(row.get("id", "")), "objectName": "AccountingType"}
+
+    return {"id": "1120447", "objectName": "AccountingType"}
+
+
+def _clean_voucher_template_for_create(voucher: dict[str, object]) -> dict[str, object]:
+    cleaned = deepcopy(voucher)
+    for field_name in ("id", "create", "update", "sevClient", "createUser"):
+        cleaned.pop(field_name, None)
+    return cleaned
+
+
+def _build_monthly_voucher_payload(
+    *,
+    sheet_name: str,
+    values: dict[str, float],
+    belegdatum: date,
+    accounting_type_rows: list[dict[str, object]] | None,
+    template_path: Path,
+    description_prefix: str,
+    credit_debit: str,
+    amount_key: str,
+) -> dict[str, object]:
+    amount = values.get(amount_key)
+    if not isinstance(amount, (int, float)):
+        raise MonthlyUmsatzFormatError(
+            f"Missing extracted voucher value for {sheet_name} {amount_key}"
+        )
+
+    voucher_date = format_german_date(belegdatum)
+    description = f"{description_prefix} {belegdatum.strftime('%m-%y')} {sheet_name}"
+    rounded_amount = _round_amount(float(amount))
+    template_context = {
+        "voucher_id": None,
+        "created_at": None,
+        "updated_at": None,
+        "belegdatum": voucher_date,
+        "payment_deadline": voucher_date,
+        "voucher_name": description,
+        "sum_net": rounded_amount,
+        "sum_tax": 0.0,
+        "sum_gross": rounded_amount,
+    }
+    template_voucher = _render_template_payload(template_path, template_context)
+    voucher = _clean_voucher_template_for_create(template_voucher)
+    voucher.update(
+        {
+            "objectName": "Voucher",
+            "mapAll": True,
+            "voucherType": "VOU",
+            "creditDebit": credit_debit,
+            "status": 50,
+            "currency": "EUR",
+            "voucherDate": voucher_date,
+            "deliveryDate": voucher_date,
+            "paymentDeadline": voucher_date,
+            "description": description,
+            "sumNet": rounded_amount,
+            "sumTax": 0.0,
+            "sumGross": rounded_amount,
+            "sumNetAccounting": rounded_amount,
+            "sumTaxAccounting": 0.0,
+            "sumGrossAccounting": rounded_amount,
+            "taxType": "default",
+        }
+    )
+    voucher.pop("payDate", None)
+    voucher.pop("paidAmount", None)
+
+    accounting_type = _select_default_voucher_accounting_type(accounting_type_rows)
+    voucher_position = {
+        "objectName": "VoucherPos",
+        "mapAll": True,
+        "net": False,
+        "taxRate": 0.0,
+        "sumGross": rounded_amount,
+        "sumNet": rounded_amount,
+        "comment": description,
+        "accountingType": deepcopy(accounting_type),
+    }
+
+    voucher_payload = {
+        "voucher": voucher,
+        "voucherPosSave": [voucher_position],
+        "voucherPosDelete": None,
+        "filename": None,
+        "notes": {
+            "source": "monthly_umsatz_excel",
+            "sheet": sheet_name,
+            "belegdatum": voucher_date,
+            "description": description,
+            "amount": rounded_amount,
+            "template_path": str(template_path),
+            "accounting_type": accounting_type,
+        },
+    }
+    return normalize_create_payload(voucher_payload)
+
+
 def build_monthly_umsatz_voucher_payloads(
     extracted_data: dict[str, dict[str, float]],
     belegdatum: date,
     accounting_type_rows: list[dict[str, object]] | None = None,
-) -> dict[str, dict[str, object]]:
+) -> dict[str, dict[str, dict[str, object]]]:
     template_voucher = _load_voucher_template()
     revenue_accounting_type = _select_default_revenue_accounting_type(accounting_type_rows)
     voucher_date = format_german_date(belegdatum)
-    payloads: dict[str, dict[str, object]] = {}
+    payloads: dict[str, dict[str, dict[str, object]]] = {}
 
     for sheet_name, values in extracted_data.items():
+        sheet_payloads: dict[str, dict[str, object]] = {}
         voucher = deepcopy(template_voucher)
         if not isinstance(voucher, dict):
             raise MonthlyUmsatzFormatError("Voucher template must resolve to an object")
@@ -319,7 +502,7 @@ def build_monthly_umsatz_voucher_payloads(
         voucher.pop("create", None)
         voucher.pop("update", None)
 
-        payloads[sheet_name] = {
+        sheet_payloads["umsatz"] = {
             "voucher": voucher,
             "voucherPosSave": positions,
             "voucherPosDelete": None,
@@ -332,5 +515,18 @@ def build_monthly_umsatz_voucher_payloads(
                 "template_path": str(TEMPLATE_PATH),
             },
         }
+        for voucher_key, template_config in MONTHLY_VOUCHER_TEMPLATE_MAP.items():
+            sheet_payloads[voucher_key] = _build_monthly_voucher_payload(
+                sheet_name=sheet_name,
+                values=values,
+                belegdatum=belegdatum,
+                accounting_type_rows=accounting_type_rows,
+                template_path=Path(template_config["template_path"]),
+                description_prefix=str(template_config["description_prefix"]),
+                credit_debit=str(template_config["credit_debit"]),
+                amount_key=str(template_config["amount_key"]),
+            )
+
+        payloads[sheet_name] = sheet_payloads
 
     return payloads

@@ -3,8 +3,12 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any
 
-from .api import book_voucher, request_voucher_by_id
-from .voucher import first_object_from_response
+from .api import book_voucher, create_voucher, request_voucher_by_id
+from .voucher import (
+    build_voucher_accounting_type_update_payload,
+    extract_voucher_accounting_type_ids,
+    first_object_from_response,
+)
 
 
 def parse_amount(value: object, field_name: str) -> float:
@@ -144,6 +148,105 @@ def book_voucher_to_check_account(
         "before_paid_amount": before_paid_amount,
         "after_paid_amount": after_paid_amount,
         "pay_date": after_pay_date,
+        "booking_payload": booking_payload,
+        "response_payload": response_payload,
+        "response_object": first_object_from_response(response_payload),
+        "updated_voucher": updated,
+    }
+
+
+def update_voucher_accounting_type(
+    base_url: str,
+    token: str,
+    voucher_id: str,
+    accounting_type: dict[str, Any] | None,
+    *,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    target_voucher_id = str(voucher_id).strip()
+    if not target_voucher_id:
+        raise RuntimeError("Target Beleg id is missing.")
+
+    target_accounting_type_id = str(
+        (accounting_type or {}).get("id", "")
+    ).strip()
+    if not target_accounting_type_id:
+        raise RuntimeError("Selected accounting type has no id.")
+
+    existing = request_voucher_by_id(base_url, token, target_voucher_id)
+    if existing is None:
+        raise RuntimeError(
+            f"Safety check failed: target Beleg id={target_voucher_id} not found before update."
+        )
+
+    before_update = str(existing.get("update", "")).strip()
+    before_accounting_type_ids = extract_voucher_accounting_type_ids(existing)
+
+    if before_accounting_type_ids and set(before_accounting_type_ids) == {target_accounting_type_id}:
+        return {
+            "voucher_id": target_voucher_id,
+            "before_update": before_update,
+            "after_update": before_update,
+            "before_accounting_type_ids": before_accounting_type_ids,
+            "after_accounting_type_ids": before_accounting_type_ids,
+            "target_accounting_type_id": target_accounting_type_id,
+            "change_status": "skipped",
+            "booking_payload": None,
+            "response_payload": None,
+            "response_object": None,
+            "updated_voucher": existing,
+        }
+
+    booking_payload = build_voucher_accounting_type_update_payload(existing, accounting_type)
+    if dry_run:
+        return {
+            "voucher_id": target_voucher_id,
+            "before_update": before_update,
+            "after_update": before_update,
+            "before_accounting_type_ids": before_accounting_type_ids,
+            "after_accounting_type_ids": before_accounting_type_ids,
+            "target_accounting_type_id": target_accounting_type_id,
+            "change_status": "dry_run",
+            "booking_payload": booking_payload,
+            "response_payload": None,
+            "response_object": None,
+            "updated_voucher": existing,
+        }
+
+    response_payload = create_voucher(base_url, token, booking_payload)
+
+    updated = request_voucher_by_id(base_url, token, target_voucher_id)
+    if updated is None:
+        raise RuntimeError(
+            f"Post-update verification failed: could not load Beleg id={target_voucher_id}."
+        )
+
+    after_update = str(updated.get("update", "")).strip()
+    after_accounting_type_ids = extract_voucher_accounting_type_ids(updated)
+
+    if not after_accounting_type_ids:
+        raise RuntimeError(
+            "Post-update verification failed: could not read any accountingType values from the voucher."
+        )
+    if set(after_accounting_type_ids) != {target_accounting_type_id}:
+        raise RuntimeError(
+            "Post-update verification failed: accountingType did not match the selected target "
+            f"(expected {target_accounting_type_id!r}, got {after_accounting_type_ids!r})."
+        )
+    if before_update and after_update and before_update == after_update:
+        raise RuntimeError(
+            "Post-update verification failed: voucher update timestamp did not change "
+            f"(still {after_update})."
+        )
+
+    return {
+        "voucher_id": target_voucher_id,
+        "before_update": before_update,
+        "after_update": after_update,
+        "before_accounting_type_ids": before_accounting_type_ids,
+        "after_accounting_type_ids": after_accounting_type_ids,
+        "target_accounting_type_id": target_accounting_type_id,
+        "change_status": "success",
         "booking_payload": booking_payload,
         "response_payload": response_payload,
         "response_object": first_object_from_response(response_payload),

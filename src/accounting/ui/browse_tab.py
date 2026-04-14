@@ -6,9 +6,16 @@ import pandas as pd
 import streamlit as st
 
 from src.accounting.common import base_url, ensure_token, report_error, safe_filename_token
-from src.accounting.master_data import load_stored_check_accounts
+from src.accounting.master_data import load_stored_accounting_types, load_stored_check_accounts
 from src.accounting.sevdesk_browse import extract_voucher_tag_names
 from src.accounting.ui.displays import show_selectable_vouchers, show_transactions
+from src.accounting.ui.filter_utils import (
+    build_status_filter_options,
+    matches_text_query,
+    selected_option_values,
+    sync_multiselect_options,
+    validate_date_range,
+)
 from src.logging_config import logger
 from src.sevdesk.api import (
     download_voucher_document,
@@ -17,7 +24,7 @@ from src.sevdesk.api import (
     request_vouchers_with_tags,
     request_vouchers_with_tags_for_contacts,
 )
-from src.sevdesk.booking import book_voucher_to_check_account
+from src.sevdesk.booking import book_voucher_to_check_account, update_voucher_accounting_type
 
 LATEST_BELEGE_ROWS_KEY = "sevdesk_latest_belege_rows"
 LATEST_BELEGE_LIMIT_KEY = "sevdesk_latest_belege_limit"
@@ -29,7 +36,8 @@ LATEST_BELEGE_SELECTION_TABLE_KEY = "sevdesk_latest_belege_selection_table"
 LATEST_BELEGE_SELECTED_IDS_KEY = "sevdesk_latest_belege_selected_ids"
 LATEST_BELEGE_UMBUCHEN_CHECK_ACCOUNT_KEY = "sevdesk_latest_belege_umbuchen_check_account"
 LATEST_BELEGE_UMBUCHEN_RESULTS_KEY = "sevdesk_latest_belege_umbuchen_results"
-EMPTY_STATUS_FILTER_LABEL = "(No status)"
+LATEST_BELEGE_UMBUCHEN_ACCOUNTING_TYPE_KEY = "sevdesk_latest_belege_umbuch_accounting_type"
+LATEST_BELEGE_UMBUCHEN_ACCOUNTING_RESULTS_KEY = "sevdesk_latest_belege_umbuch_accounting_results"
 NO_TAGS_FILTER_LABEL = "(No tags)"
 LATEST_BELEGE_DOWNLOAD_PAYLOAD_KEY = "sevdesk_latest_belege_download_payload"
 LATEST_BELEGE_START_DATE_KEY = "sevdesk_latest_belege_start_date"
@@ -38,6 +46,7 @@ LATEST_BELEGE_API_STATUS_KEY = "sevdesk_latest_belege_api_status"
 LATEST_BELEGE_HAS_DOCUMENT_KEY = "sevdesk_latest_belege_has_document"
 LATEST_BELEGE_CONTACT_QUERY_KEY = "sevdesk_latest_belege_contact_query"
 LATEST_BELEGE_CONTACT_MATCHES_KEY = "sevdesk_latest_belege_contact_matches"
+LATEST_BELEGE_TEXT_QUERY_KEY = "sevdesk_latest_belege_text_query"
 MAX_SERVER_SIDE_CONTACT_MATCHES = 20
 
 API_STATUS_OPTION_LABELS = {
@@ -123,43 +132,8 @@ def _find_contacts_for_server_side_filter(token: str, contact_query: str) -> lis
     return matched_rows
 
 
-def _sync_multiselect_options(selection_key: str, options_key: str, options: list[str]) -> None:
-    previous_options = st.session_state.get(options_key)
-    current_selection = st.session_state.get(selection_key, [])
-
-    if not options:
-        st.session_state[options_key] = []
-        st.session_state[selection_key] = []
-        return
-
-    if previous_options != options:
-        st.session_state[options_key] = options
-        st.session_state[selection_key] = options
-        return
-
-    if selection_key not in st.session_state:
-        st.session_state[selection_key] = options
-        return
-
-    filtered_selection = [option for option in current_selection if option in options]
-    if not filtered_selection:
-        st.session_state[selection_key] = options
-        return
-    if filtered_selection != current_selection:
-        st.session_state[selection_key] = filtered_selection
-
-
 def _voucher_status_value(row: dict) -> str:
     return str(row.get("status", "")).strip()
-
-
-def _voucher_status_label(status: str) -> str:
-    return status or EMPTY_STATUS_FILTER_LABEL
-
-
-def _build_status_filter_options(rows: list[dict]) -> dict[str, str]:
-    values = sorted({_voucher_status_value(row) for row in rows})
-    return {_voucher_status_label(value): value for value in values}
 
 
 def _build_tag_filter_options(rows: list[dict]) -> list[str]:
@@ -184,8 +158,35 @@ def _row_matches_tag_filter(row: dict, selected_tags: set[str]) -> bool:
     return bool(row_tags.intersection(selected_tags))
 
 
+def _voucher_text_matches(row: dict, query: str) -> bool:
+    return matches_text_query(
+        query,
+        [
+            row.get("id"),
+            row.get("voucherNumber"),
+            row.get("number"),
+            row.get("description"),
+            row.get("name"),
+            row.get("supplierName"),
+            row.get("invoiceDate"),
+            row.get("voucherDate"),
+            row.get("status"),
+            *extract_voucher_tag_names(row),
+        ],
+    )
+
+
 def _active_check_account_rows(rows: list[dict]) -> list[dict]:
     active_rows = [row for row in rows if str(row.get("status", "")).strip() == "100"]
+    return active_rows or rows
+
+
+def _active_accounting_type_rows(rows: list[dict]) -> list[dict]:
+    active_rows = [
+        row
+        for row in rows
+        if str(row.get("status", "")).strip() == "100" and bool(row.get("active", True))
+    ]
     return active_rows or rows
 
 
@@ -196,6 +197,19 @@ def _check_account_label(row: dict) -> str:
     if accounting_number:
         return f"{name} ({accounting_number} / {row_id})"
     return f"{name} ({row_id})"
+
+
+def _accounting_type_label(row: dict) -> str:
+    name = str(row.get("name", "")).strip() or "Unnamed"
+    row_id = str(row.get("id", "")).strip() or "-"
+    skr03 = str(row.get("skr03", "")).strip()
+    skr04 = str(row.get("skr04", "")).strip()
+    details: list[str] = [row_id]
+    if skr03:
+        details.append(f"SKR03 {skr03}")
+    if skr04:
+        details.append(f"SKR04 {skr04}")
+    return f"{name} ({' / '.join(details)})"
 
 
 def _sevdesk_start_timestamp(value: date | None) -> int | None:
@@ -279,6 +293,26 @@ def _render_latest_belege_umbuchen_results() -> None:
         st.warning(f"{success_count} Belege booked successfully, {error_count} failed.")
     else:
         st.success(f"{success_count} Belege booked successfully.")
+    st.dataframe(pd.DataFrame(results), width="stretch", hide_index=True)
+
+
+def _render_latest_belege_accounting_results() -> None:
+    results = st.session_state.get(LATEST_BELEGE_UMBUCHEN_ACCOUNTING_RESULTS_KEY)
+    if not isinstance(results, list) or not results:
+        return
+
+    st.markdown("**Buchungskonto-Updates**")
+    success_count = sum(1 for row in results if row.get("result") == "success")
+    skipped_count = sum(1 for row in results if row.get("result") == "skipped")
+    error_count = len(results) - success_count - skipped_count
+    if error_count:
+        st.warning(
+            f"{success_count} Belege updated successfully, {skipped_count} skipped, {error_count} failed."
+        )
+    elif skipped_count:
+        st.success(f"{success_count} Belege updated successfully, {skipped_count} skipped.")
+    else:
+        st.success(f"{success_count} Belege updated successfully.")
     st.dataframe(pd.DataFrame(results), width="stretch", hide_index=True)
 
 
@@ -439,86 +473,188 @@ def _render_latest_belege_umbuchen_section(
             "No stored check accounts found. Open Accounting MD in the accounting app first "
             "so you can fetch them."
         )
-        _render_latest_belege_umbuchen_results()
-        return
+    else:
+        check_account_options = {
+            _check_account_label(row): str(row.get("id", "")).strip()
+            for row in active_check_accounts
+            if str(row.get("id", "")).strip()
+        }
+        if not check_account_options:
+            st.info(
+                "Stored check accounts are missing usable ids. Refresh them in Accounting MD first."
+            )
+        else:
+            selected_check_account_label = st.selectbox(
+                "Target check account",
+                options=list(check_account_options.keys()),
+                key=LATEST_BELEGE_UMBUCHEN_CHECK_ACCOUNT_KEY,
+            )
 
-    check_account_options = {
-        _check_account_label(row): str(row.get("id", "")).strip()
-        for row in active_check_accounts
-        if str(row.get("id", "")).strip()
-    }
-    if not check_account_options:
-        st.info("Stored check accounts are missing usable ids. Refresh them in Accounting MD first.")
-        _render_latest_belege_umbuchen_results()
-        return
+            if st.button(
+                "Umbuchen ausgewählte Belege",
+                width="stretch",
+                disabled=not selected_rows,
+                type="primary",
+            ):
+                token = ensure_token()
+                if token:
+                    results: list[dict[str, str]] = []
+                    successful_voucher_ids: set[str] = set()
+                    updated_vouchers: list[dict] = []
+                    with st.spinner("Umbuchung in sevDesk wird ausgefuehrt..."):
+                        for row in selected_rows:
+                            voucher_id = str(row.get("id", "")).strip()
+                            description = str(row.get("description", "")).strip() or "-"
+                            try:
+                                booking_result = book_voucher_to_check_account(
+                                    base_url(),
+                                    token,
+                                    voucher_id,
+                                    check_account_options[selected_check_account_label],
+                                )
+                                successful_voucher_ids.add(voucher_id)
+                                updated_voucher = booking_result.get("updated_voucher")
+                                if isinstance(updated_voucher, dict):
+                                    updated_vouchers.append(updated_voucher)
+                                results.append(
+                                    {
+                                        "result": "success",
+                                        "id": voucher_id,
+                                        "beschreibung": description,
+                                        "fromStatus": booking_result["before_status"] or "-",
+                                        "toStatus": booking_result["after_status"] or "-",
+                                        "payDate": booking_result["pay_date"] or "-",
+                                        "message": "Booked successfully.",
+                                    }
+                                )
+                            except Exception as exc:
+                                results.append(
+                                    {
+                                        "result": "error",
+                                        "id": voucher_id,
+                                        "beschreibung": description,
+                                        "fromStatus": "-",
+                                        "toStatus": "-",
+                                        "payDate": "-",
+                                        "message": str(exc),
+                                    }
+                                )
 
-    selected_check_account_label = st.selectbox(
-        "Target check account",
-        options=list(check_account_options.keys()),
-        key=LATEST_BELEGE_UMBUCHEN_CHECK_ACCOUNT_KEY,
-    )
+                    st.session_state[LATEST_BELEGE_UMBUCHEN_RESULTS_KEY] = results
+                    if successful_voucher_ids:
+                        remaining_selected_ids = [
+                            voucher_id
+                            for voucher_id in st.session_state.get(LATEST_BELEGE_SELECTED_IDS_KEY, [])
+                            if voucher_id not in successful_voucher_ids
+                        ]
+                        st.session_state[LATEST_BELEGE_SELECTED_IDS_KEY] = remaining_selected_ids
+                        _merge_updated_vouchers_into_session(updated_vouchers)
 
-    if st.button(
-        "Umbuchen ausgewählte Belege",
-        width="stretch",
-        disabled=not selected_rows,
-        type="primary",
-    ):
-        token = ensure_token()
-        if token:
-            results: list[dict[str, str]] = []
-            successful_voucher_ids: set[str] = set()
-            updated_vouchers: list[dict] = []
-            with st.spinner("Umbuchung in sevDesk wird ausgefuehrt..."):
-                for row in selected_rows:
-                    voucher_id = str(row.get("id", "")).strip()
-                    description = str(row.get("description", "")).strip() or "-"
-                    try:
-                        booking_result = book_voucher_to_check_account(
-                            base_url(),
-                            token,
-                            voucher_id,
-                            check_account_options[selected_check_account_label],
-                        )
-                        successful_voucher_ids.add(voucher_id)
-                        updated_voucher = booking_result.get("updated_voucher")
-                        if isinstance(updated_voucher, dict):
-                            updated_vouchers.append(updated_voucher)
-                        results.append(
-                            {
-                                "result": "success",
-                                "id": voucher_id,
-                                "beschreibung": description,
-                                "fromStatus": booking_result["before_status"] or "-",
-                                "toStatus": booking_result["after_status"] or "-",
-                                "payDate": booking_result["pay_date"] or "-",
-                                "message": "Booked successfully.",
-                            }
-                        )
-                    except Exception as exc:
-                        results.append(
-                            {
-                                "result": "error",
-                                "id": voucher_id,
-                                "beschreibung": description,
-                                "fromStatus": "-",
-                                "toStatus": "-",
-                                "payDate": "-",
-                                "message": str(exc),
-                            }
-                        )
+    st.divider()
+    st.markdown("**Umbuchen auf Buchungskonto**")
 
-            st.session_state[LATEST_BELEGE_UMBUCHEN_RESULTS_KEY] = results
-            if successful_voucher_ids:
-                remaining_selected_ids = [
-                    voucher_id
-                    for voucher_id in st.session_state.get(LATEST_BELEGE_SELECTED_IDS_KEY, [])
-                    if voucher_id not in successful_voucher_ids
-                ]
-                st.session_state[LATEST_BELEGE_SELECTED_IDS_KEY] = remaining_selected_ids
-                _merge_updated_vouchers_into_session(updated_vouchers)
+    accounting_types_for_selection = st.session_state.get("sevdesk_accounting_types_rows")
+    if accounting_types_for_selection is None:
+        accounting_types_for_selection = load_stored_accounting_types()
+    active_accounting_types = _active_accounting_type_rows(accounting_types_for_selection or [])
+    if not active_accounting_types:
+        st.info(
+            "No stored accounting types found. Open Accounting MD in the accounting app first "
+            "so you can fetch them."
+        )
+    else:
+        accounting_type_options = {
+            _accounting_type_label(row): row
+            for row in active_accounting_types
+            if str(row.get("id", "")).strip()
+        }
+        if not accounting_type_options:
+            st.info(
+                "Stored accounting types are missing usable ids. Refresh them in Accounting MD first."
+            )
+        else:
+            selected_accounting_type_label = st.selectbox(
+                "Target accounting type",
+                options=list(accounting_type_options.keys()),
+                key=LATEST_BELEGE_UMBUCHEN_ACCOUNTING_TYPE_KEY,
+            )
+            selected_accounting_type = accounting_type_options[selected_accounting_type_label]
+
+            if st.button(
+                "Buchungskonto ausgewählter Belege ändern",
+                width="stretch",
+                disabled=not selected_rows,
+                type="primary",
+            ):
+                token = ensure_token()
+                if token:
+                    results: list[dict[str, str]] = []
+                    processed_voucher_ids: set[str] = set()
+                    updated_vouchers: list[dict] = []
+                    with st.spinner("Buchungskonto in sevDesk wird aktualisiert..."):
+                        for row in selected_rows:
+                            voucher_id = str(row.get("id", "")).strip()
+                            description = str(row.get("description", "")).strip() or "-"
+                            try:
+                                update_result = update_voucher_accounting_type(
+                                    base_url(),
+                                    token,
+                                    voucher_id,
+                                    selected_accounting_type,
+                                )
+                                change_status = str(update_result.get("change_status", "success")).strip()
+                                if change_status in {"success", "skipped"}:
+                                    processed_voucher_ids.add(voucher_id)
+                                updated_voucher = update_result.get("updated_voucher")
+                                if isinstance(updated_voucher, dict):
+                                    updated_vouchers.append(updated_voucher)
+
+                                before_ids = ", ".join(
+                                    update_result.get("before_accounting_type_ids", []) or []
+                                ) or "-"
+                                after_ids = ", ".join(
+                                    update_result.get("after_accounting_type_ids", []) or []
+                                ) or "-"
+                                results.append(
+                                    {
+                                        "result": change_status,
+                                        "id": voucher_id,
+                                        "beschreibung": description,
+                                        "fromAccountingType": before_ids,
+                                        "toAccountingType": after_ids,
+                                        "targetAccountingType": selected_accounting_type_label,
+                                        "message": (
+                                            "Already on target accounting type."
+                                            if change_status == "skipped"
+                                            else "Updated successfully."
+                                        ),
+                                    }
+                                )
+                            except Exception as exc:
+                                results.append(
+                                    {
+                                        "result": "error",
+                                        "id": voucher_id,
+                                        "beschreibung": description,
+                                        "fromAccountingType": "-",
+                                        "toAccountingType": "-",
+                                        "targetAccountingType": selected_accounting_type_label,
+                                        "message": str(exc),
+                                    }
+                                )
+
+                    st.session_state[LATEST_BELEGE_UMBUCHEN_ACCOUNTING_RESULTS_KEY] = results
+                    if processed_voucher_ids:
+                        remaining_selected_ids = [
+                            voucher_id
+                            for voucher_id in st.session_state.get(LATEST_BELEGE_SELECTED_IDS_KEY, [])
+                            if voucher_id not in processed_voucher_ids
+                        ]
+                        st.session_state[LATEST_BELEGE_SELECTED_IDS_KEY] = remaining_selected_ids
+                        _merge_updated_vouchers_into_session(updated_vouchers)
 
     _render_latest_belege_umbuchen_results()
+    _render_latest_belege_accounting_results()
 
 
 def render_latest_belege_section() -> None:
@@ -573,8 +709,12 @@ def render_latest_belege_section() -> None:
             try:
                 start_date = st.session_state.get(LATEST_BELEGE_START_DATE_KEY)
                 end_date = st.session_state.get(LATEST_BELEGE_END_DATE_KEY)
-                if isinstance(start_date, date) and isinstance(end_date, date) and start_date > end_date:
-                    st.error("`Belegdatum ab` darf nicht nach `Belegdatum bis` liegen.")
+                if not validate_date_range(
+                    start_date,
+                    end_date,
+                    start_label="Belegdatum ab",
+                    end_label="Belegdatum bis",
+                ):
                     return
 
                 request_filters = _build_voucher_request_filters()
@@ -616,6 +756,7 @@ def render_latest_belege_section() -> None:
                 st.session_state[LATEST_BELEGE_SELECTED_IDS_KEY] = []
                 st.session_state.pop(LATEST_BELEGE_SELECTION_TABLE_KEY, None)
                 st.session_state.pop(LATEST_BELEGE_UMBUCHEN_RESULTS_KEY, None)
+                st.session_state.pop(LATEST_BELEGE_UMBUCHEN_ACCOUNTING_RESULTS_KEY, None)
                 st.session_state.pop(LATEST_BELEGE_DOWNLOAD_PAYLOAD_KEY, None)
             except Exception as exc:
                 report_error(
@@ -641,29 +782,38 @@ def render_latest_belege_section() -> None:
                 f"Server-side Lieferant/Kunde filter `{contact_query}` did not match any sevDesk contacts."
             )
 
-    status_options = _build_status_filter_options(rows)
+    status_options = build_status_filter_options(
+        rows,
+        status_getter=_voucher_status_value,
+    )
     status_labels = list(status_options.keys())
     tag_labels = _build_tag_filter_options(rows)
-    _sync_multiselect_options(
+    sync_multiselect_options(
         LATEST_BELEGE_STATUS_FILTER_KEY,
         LATEST_BELEGE_STATUS_FILTER_OPTIONS_KEY,
         status_labels,
     )
-    _sync_multiselect_options(
+    sync_multiselect_options(
         LATEST_BELEGE_TAG_FILTER_KEY,
         LATEST_BELEGE_TAG_FILTER_OPTIONS_KEY,
         tag_labels,
     )
 
-    filter_col1, filter_col2 = st.columns(2)
+    filter_col1, filter_col2, filter_col3 = st.columns(3)
     with filter_col1:
+        st.text_input(
+            "Suche in Beleg",
+            key=LATEST_BELEGE_TEXT_QUERY_KEY,
+            help="Matches number, description, supplier, date, status, tags, and id.",
+        )
+    with filter_col2:
         selected_status_labels = st.multiselect(
             "Status filter",
             options=status_labels,
             key=LATEST_BELEGE_STATUS_FILTER_KEY,
             disabled=not status_labels,
         )
-    with filter_col2:
+    with filter_col3:
         selected_tag_labels = st.multiselect(
             "Tag filter",
             options=tag_labels,
@@ -673,16 +823,21 @@ def render_latest_belege_section() -> None:
 
     filtered_rows = st.session_state.get(LATEST_BELEGE_ROWS_KEY)
     if filtered_rows:
-        selected_status_values = {
-            status_options[label] for label in selected_status_labels if label in status_options
-        }
+        selected_status_values = selected_option_values(selected_status_labels, status_options)
         selected_tag_values = {label for label in selected_tag_labels if label in tag_labels}
-        filtered_rows = [
-            row
-            for row in filtered_rows
-            if _voucher_status_value(row) in selected_status_values
-            and _row_matches_tag_filter(row, selected_tag_values)
-        ]
+        text_query = str(st.session_state.get(LATEST_BELEGE_TEXT_QUERY_KEY, "")).strip()
+        if status_labels and not selected_status_values:
+            filtered_rows = []
+        elif tag_labels and not selected_tag_values:
+            filtered_rows = []
+        else:
+            filtered_rows = [
+                row
+                for row in filtered_rows
+                if _voucher_status_value(row) in selected_status_values
+                and (not tag_labels or _row_matches_tag_filter(row, selected_tag_values))
+                and _voucher_text_matches(row, text_query)
+            ]
 
     total_count = len(rows) if st.session_state.get(LATEST_BELEGE_ROWS_KEY) is not None else None
     _render_latest_belege_umbuchen_section(filtered_rows, total_count)

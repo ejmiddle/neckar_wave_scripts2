@@ -49,6 +49,7 @@ from src.accounting.state import (
     AMAZON_PAYEE_NAME,
     SPARKASSE_NAME_FRAGMENT,
     clear_amazon_analysis_state,
+    matches_amazon_payee_name,
 )
 from src.accounting.ui.displays import (
     render_pdf_inline,
@@ -109,7 +110,7 @@ def render_amazon_setup_section() -> list[dict[str, Any]] | None:
     st.subheader("Sparkasse Amazon Payments")
     st.caption(
         "Filters Sparkasse bookings where `payeePayerName` contains "
-        f"`{AMAZON_PAYEE_NAME}`."
+        f"`{', '.join(AMAZON_PAYEE_NAME)}`."
     )
     st.caption(
         f"PDF extraction uses `{AMAZON_EXTRACTION_PROVIDER}` / `{AMAZON_EXTRACTION_MODEL}`."
@@ -173,8 +174,14 @@ def render_amazon_setup_section() -> list[dict[str, Any]] | None:
                         filtered_rows = [
                             row
                             for row in rows
-                            if AMAZON_PAYEE_NAME in str(row.get("payeePayerName", ""))
+                            if matches_amazon_payee_name(row.get("payeePayerName", ""))
                         ]
+                        logger.info(
+                            "Loaded %s Sparkasse row(s), matched %s Amazon row(s) using payee fragments=%s.",
+                            len(rows),
+                            len(filtered_rows),
+                            AMAZON_PAYEE_NAME,
+                        )
                         st.session_state["sevdesk_sparkasse_amazon_rows"] = filtered_rows
                         st.rerun()
                     except Exception as exc:
@@ -237,6 +244,11 @@ def render_booking_selection_section(amazon_rows: list[dict[str, Any]]) -> list[
     ]
 
     if st.button("Process bookings", width="stretch"):
+        logger.info(
+            "Triggered 'Process bookings' from Streamlit UI with %s selected booking(s): %s.",
+            len(selected_booking_rows),
+            [str(row.get("id", "")) for row in selected_booking_rows],
+        )
         _handle_identify_pdfs(selected_booking_rows)
 
     return selected_booking_rows
@@ -333,7 +345,15 @@ def render_processing_results_section(selected_booking_rows: list[dict[str, Any]
     _render_booking_upload_status(voucher_payload_state)
 
     if not current_result["cards"]:
-        st.info("No matching receipt PDF was found for this order.")
+        logger.warning(
+            "Amazon processing result has no matching receipt PDFs for booking_id=%s order_number=%s",
+            booking_id,
+            order_number,
+        )
+        st.warning(
+            "No matching receipt PDF was found for this order. "
+            f"Booking `{booking_id}` | Order `{order_number}`"
+        )
         return
 
     for card_index, card in enumerate(current_result["cards"], start=1):
@@ -342,6 +362,7 @@ def render_processing_results_section(selected_booking_rows: list[dict[str, Any]
         _render_compact_processing_card(
             pdf_path=card["pdf_path"],
             entry_index=card["entry_index"],
+            page_number=card.get("page_number"),
             extraction_entry=card["extraction_entry"],
             voucher_entry=card["voucher_entry"],
             voucher_entries=current_result["voucher_entries"],
@@ -364,19 +385,19 @@ def _build_processing_result_items(
         voucher_payload_state = _get_booking_voucher_payload(booking_id)
         pdf_extractions = _coerce_pdf_extractions(llm_result)
         voucher_entries = _coerce_voucher_entries(voucher_payload_state)
-        extraction_entries_by_path = {
-            str(entry.get("pdfPath", "")).strip(): entry
+        extraction_entries_by_source = {
+            str(entry.get("sourceKey", "")).strip(): entry
             for entry in pdf_extractions
-            if isinstance(entry, dict)
+            if isinstance(entry, dict) and str(entry.get("sourceKey", "")).strip()
         }
-        voucher_entries_by_path = {
-            str(entry.get("matchedPdfPath", "")).strip(): entry
+        voucher_entries_by_source = {
+            str(entry.get("sourceKey", "")).strip(): entry
             for entry in voucher_entries
-            if isinstance(entry, dict)
+            if isinstance(entry, dict) and str(entry.get("sourceKey", "")).strip()
         }
 
         pdf_paths = pdf_match.get("pdfPaths", [])
-        if not pdf_paths:
+        if not pdf_paths and not pdf_extractions:
             result_items.append(
                 {
                     "booking_row": booking_row,
@@ -390,16 +411,31 @@ def _build_processing_result_items(
             continue
 
         cards: list[dict[str, Any]] = []
-        for entry_index, pdf_path in enumerate(pdf_paths, start=1):
-            pdf_path_value = str(pdf_path).strip()
-            cards.append(
-                {
-                    "pdf_path": pdf_path_value,
-                    "entry_index": entry_index,
-                    "extraction_entry": extraction_entries_by_path.get(pdf_path_value),
-                    "voucher_entry": voucher_entries_by_path.get(pdf_path_value),
-                }
-            )
+        if pdf_extractions:
+            for entry_index, extraction_entry in enumerate(pdf_extractions, start=1):
+                pdf_path_value = str(extraction_entry.get("pdfPath", "")).strip()
+                source_key = str(extraction_entry.get("sourceKey", "")).strip()
+                cards.append(
+                    {
+                        "pdf_path": pdf_path_value,
+                        "entry_index": entry_index,
+                        "page_number": extraction_entry.get("pageNumber"),
+                        "extraction_entry": extraction_entries_by_source.get(source_key),
+                        "voucher_entry": voucher_entries_by_source.get(source_key),
+                    }
+                )
+        else:
+            for entry_index, pdf_path in enumerate(pdf_paths, start=1):
+                pdf_path_value = str(pdf_path).strip()
+                cards.append(
+                    {
+                        "pdf_path": pdf_path_value,
+                        "entry_index": entry_index,
+                        "page_number": None,
+                        "extraction_entry": None,
+                        "voucher_entry": None,
+                    }
+                )
         result_items.append(
             {
                 "booking_row": booking_row,
@@ -574,16 +610,27 @@ def _render_compact_processing_card(
     *,
     pdf_path: str,
     entry_index: int,
+    page_number: int | None,
     extraction_entry: dict[str, Any] | None,
     voucher_entry: dict[str, Any] | None,
     voucher_entries: list[dict[str, Any]],
     voucher_payload_state: dict[str, Any] | None,
     llm_result: dict[str, Any] | None,
 ) -> None:
-    pdf_label = Path(pdf_path).name if pdf_path else f"PDF {entry_index}"
+    page_count = extraction_entry.get("pageCount") if isinstance(extraction_entry, dict) else None
+    pdf_label = (
+        f"{Path(pdf_path).name} | Page {page_number}"
+        if pdf_path and isinstance(page_number, int)
+        else (Path(pdf_path).name if pdf_path else f"PDF {entry_index}")
+    )
     comparison_rows = extraction_entry.get("comparison", []) if isinstance(extraction_entry, dict) else []
     amount_match = _comparison_match_label(comparison_rows, "Betrag")
+    if amount_match == "-":
+        amount_match = _comparison_match_label(comparison_rows, "Betrag (Seite)")
+    if amount_match == "-" and isinstance(llm_result, dict):
+        amount_match = _match_summary_label(llm_result.get("aggregateMatch"))
     date_match = _comparison_match_label(comparison_rows, "Datum")
+    amount_label = "Order amount" if isinstance(page_count, int) and page_count > 1 else "Amount"
 
     with st.container(border=True):
         title_col, match_col, detail_col = st.columns([4, 3, 1])
@@ -594,9 +641,9 @@ def _render_compact_processing_card(
             st.caption(
                 " | ".join(
                     [
-                        f"Amount: {amount_match}",
+                        f"{amount_label}: {amount_match}",
                         f"Date: {date_match}",
-                        f"Pages: {extraction_entry.get('pageCount', '-') if extraction_entry else '-'}",
+                        f"Pages: {page_count if isinstance(page_count, int) else '-'}",
                     ]
                 )
             )
@@ -861,18 +908,22 @@ def _handle_identify_pdfs(selected_booking_rows: list[dict[str, Any]]) -> None:
                             AMAZON_EXTRACTION_PROVIDER,
                             AMAZON_EXTRACTION_MODEL,
                         )
-                        extraction_result = extract_accounting_data_from_pdf(
+                        page_extraction_results = extract_accounting_data_from_pdf(
                             pdf_path=matched_pdf_path,
                             provider=AMAZON_EXTRACTION_PROVIDER,
                             model_name=AMAZON_EXTRACTION_MODEL,
                             api_key=api_key,
                         )
+                        extraction_results.extend(page_extraction_results)
+
+                    compare_amount_to_booking = len(extraction_results) == 1
+                    for extraction_result in extraction_results:
                         extraction_result["bookingId"] = booking_id
                         extraction_result["comparison"] = build_accounting_comparison_rows(
                             selected_booking,
                             extraction_result["extracted"],
+                            compare_amount_to_booking=compare_amount_to_booking,
                         )
-                        extraction_results.append(extraction_result)
 
                     aggregate_match = aggregate_booking_receipt_match(selected_booking, extraction_results)
                     aggregate_result = {
@@ -958,20 +1009,24 @@ def render_extraction_results_section(selected_booking_rows: list[dict[str, Any]
     aggregate_match = llm_result.get("aggregateMatch")
     st.markdown("**Booking Comparison**")
     if aggregate_match is True:
-        st.success("Match: Die Summe der extrahierten PDF-Betraege stimmt mit der Buchung ueberein.")
+        st.success("Match: Die Summe der extrahierten PDF-Seitenbetraege stimmt mit der Buchung ueberein.")
     elif aggregate_match is False:
-        st.warning("Die Summe der extrahierten PDF-Betraege stimmt nicht mit der Buchung ueberein.")
+        st.warning("Die Summe der extrahierten PDF-Seitenbetraege stimmt nicht mit der Buchung ueberein.")
     st.dataframe(pd.DataFrame(llm_result.get("comparison", [])), width="stretch")
     st.markdown("**Extracted Accounting Data**")
     st.caption(
-        "LLM results for all matched PDFs of the currently selected booking. "
+        "LLM results for all matched PDF pages of the currently selected booking. "
         f"Model: `{llm_result.get('provider')}` / `{llm_result.get('model')}`"
     )
     for index, extraction_entry in enumerate(pdf_extractions, start=1):
         extracted = extraction_entry.get("extracted", {})
         pdf_path = str(extraction_entry.get("pdfPath", "")).strip()
+        page_number = extraction_entry.get("pageNumber")
         pdf_label = Path(pdf_path).name if pdf_path else f"PDF {index}"
-        st.markdown(f"**PDF {index} | {pdf_label}**")
+        if isinstance(page_number, int):
+            st.markdown(f"**PDF {index} | {pdf_label} | Page {page_number}**")
+        else:
+            st.markdown(f"**PDF {index} | {pdf_label}**")
         pdf_col, extracted_col = st.columns(2)
         with pdf_col:
             if pdf_path:
@@ -1025,11 +1080,11 @@ def render_voucher_entries_section(selected_booking_rows: list[dict[str, Any]]) 
 
     aggregate_match_for_create = voucher_payload_state.get("aggregateMatch")
     if aggregate_match_for_create is True:
-        st.success("A voucher JSON was generated for each matched PDF.")
+        st.success("A voucher JSON was generated for each matched PDF page.")
     elif aggregate_match_for_create is False:
         st.warning(
-            "Voucher JSON files were generated for each matched PDF, "
-            "but API creation is disabled until the summed PDF amount matches the booking."
+            "Voucher JSON files were generated for each matched PDF page, "
+            "but API creation is disabled until the summed page amount matches the booking."
         )
     else:
         st.info("Voucher JSON files were generated.")
@@ -1062,6 +1117,9 @@ def _render_single_voucher_entry(
         if matched_pdf_path_for_create
         else f"PDF {entry_index}"
     )
+    page_number = voucher_entry.get("pageNumber")
+    if isinstance(page_number, int):
+        pdf_label = f"{pdf_label} | Page {page_number}"
     validation_errors = voucher_entry.get("validationErrors", [])
     seller_name = str(voucher_entry.get("sellerName", "")).strip()
     seller_vat_id = str(voucher_entry.get("sellerVatId", "")).strip()
@@ -1320,6 +1378,13 @@ def _render_create_voucher_button(
                 request_payload["filename"] = remote_filename
             else:
                 request_payload["filename"] = None
+            logger.info(
+                "Amazon voucher upload payload booking_id=%s entry_index=%s pdf=%s payload=%s",
+                booking_id,
+                entry_index,
+                matched_pdf_path_for_create or "-",
+                json.dumps(request_payload, ensure_ascii=True, sort_keys=True, default=str, indent=2),
+            )
             response_payload = create_voucher(
                 base_url(),
                 token,
@@ -1357,6 +1422,7 @@ def _render_create_voucher_button(
                 "Voucher created successfully in sevDesk."
                 + (f" New id: `{created_voucher_id}`." if created_voucher_id else "")
             )
+            st.rerun()
         except Exception as exc:
             logger.error(
                 "Failed create-voucher payload: %s",

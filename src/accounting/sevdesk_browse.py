@@ -1,5 +1,7 @@
+import re
 from typing import Any
 
+from src.accounting.common import parse_amount_value
 from src.accounting.state import TRANSACTION_STATUS_LABELS
 from src.sevdesk.voucher import format_amount, format_date, format_number, format_text
 
@@ -93,6 +95,72 @@ def _voucher_contact_name(row: dict[str, Any]) -> str:
     return ""
 
 
+def _invoice_contact_name(row: dict[str, Any]) -> str:
+    customer_name = str(
+        row.get("customerName")
+        or row.get("contactName")
+        or row.get("clientName")
+        or row.get("recipientName")
+        or row.get("addressName")
+        or row.get("addressParentName")
+        or row.get("addressName2")
+        or ""
+    ).strip()
+    if customer_name:
+        return customer_name
+
+    for key in ("customer", "contact", "supplier", "debtor", "recipient"):
+        contact_name = _contact_display_name(row.get(key))
+        if contact_name:
+            return contact_name
+
+    return _voucher_contact_name(row)
+
+
+def _invoice_amount_value(row: dict[str, Any]) -> Any:
+    for key in ("sumGross", "totalGross", "sumNet"):
+        if key in row and row.get(key) is not None:
+            return row.get(key)
+    return None
+
+
+def _invoice_type_value(row: dict[str, Any]) -> str:
+    return str(row.get("invoiceType", "")).strip()
+
+
+def _invoice_is_storno(row: dict[str, Any]) -> bool:
+    invoice_type = _invoice_type_value(row).casefold()
+    if invoice_type == "sr":
+        return True
+
+    header = str(row.get("header", "")).strip().casefold()
+    return "stornorechnung" in header or "storno" in header
+
+
+def _invoice_description(row: dict[str, Any]) -> str:
+    header = str(row.get("header", "")).strip()
+    if header:
+        return header
+    return format_text(row)
+
+
+def _invoice_subinfo(row: dict[str, Any]) -> str:
+    search_fields = (
+        row.get("header"),
+        row.get("headText"),
+        row.get("footText"),
+        row.get("customerInternalNote"),
+    )
+    for value in search_fields:
+        text = str(value or "").strip()
+        if not text:
+            continue
+        match = re.search(r"#[A-Za-z0-9_-]+", text)
+        if match:
+            return match.group(0)
+    return "-"
+
+
 def format_voucher_row(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": str(row.get("id", "")),
@@ -117,6 +185,22 @@ def format_latest_voucher_row(row: dict[str, Any]) -> dict[str, Any]:
         "lieferant": _voucher_contact_name(row) or "-",
         "status": row.get("status", "-"),
         "tags": ", ".join(extract_voucher_tag_names(row)) or "-",
+    }
+
+
+def format_latest_invoice_row(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": str(row.get("id", "")),
+        "nummer": str(row.get("invoiceNumber") or row.get("number") or row.get("id") or "-"),
+        "angelegt": str(row.get("create") or row.get("update") or "-"),
+        "rechnungsdatum": str(row.get("invoiceDate") or row.get("voucherDate") or "-"),
+        "betrag": parse_amount_value(_invoice_amount_value(row)),
+        "rechnungstyp": _invoice_type_value(row) or "-",
+        "storno": "Ja" if _invoice_is_storno(row) else "Nein",
+        "subinfo": _invoice_subinfo(row),
+        "beschreibung": _invoice_description(row),
+        "kunde": _invoice_contact_name(row) or "-",
+        "status": row.get("status", "-"),
     }
 
 

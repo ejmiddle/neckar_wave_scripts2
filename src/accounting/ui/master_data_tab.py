@@ -4,16 +4,19 @@ from src.accounting.common import base_url, ensure_token, report_error
 from src.accounting.master_data import (
     export_accounting_types,
     export_check_accounts,
+    export_products,
     export_tax_rules,
     export_tax_sets,
     load_stored_accounting_types,
     load_stored_check_accounts,
+    load_stored_products,
     load_stored_tax_rules,
     load_stored_tax_sets,
 )
 from src.accounting.state import (
     ACCOUNTING_TYPES_EXPORT_PATH,
     CHECK_ACCOUNTS_EXPORT_PATH,
+    PRODUCTS_EXPORT_PATH,
     TAX_RULES_EXPORT_PATH,
     TAX_SETS_EXPORT_PATH,
 )
@@ -21,12 +24,37 @@ from src.accounting.ui.displays import (
     show_accounting_types,
     show_check_accounts,
     show_downloaded_payload,
+    show_products,
     show_tax_rules,
     show_tax_sets,
 )
 
 
 def render_master_data_tab() -> None:
+    with st.expander("Products", expanded=True):
+        if st.button("Fetch all products and store master data", width="stretch"):
+            token = ensure_token()
+            if token:
+                try:
+                    st.session_state["sevdesk_products_rows"] = export_products(
+                        base_url(),
+                        token,
+                    )
+                except Exception as exc:
+                    report_error(
+                        f"Failed to load products: {exc}",
+                        log_message="Failed to load products",
+                        exc_info=True,
+                    )
+
+        stored_products = st.session_state.get("sevdesk_products_rows")
+        if stored_products is None:
+            stored_products = load_stored_products()
+            if stored_products:
+                st.session_state["sevdesk_products_rows"] = stored_products
+        show_products(stored_products)
+        show_downloaded_payload("Raw products JSON", PRODUCTS_EXPORT_PATH)
+
     with st.expander("Accounting Types", expanded=True):
         if st.button("Fetch all accounting types and store master data", width="stretch"):
             token = ensure_token()

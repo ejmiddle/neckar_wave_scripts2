@@ -204,15 +204,261 @@ def request_vouchers(
         offset += len(page)
 
     rows.sort(key=_voucher_sort_key, reverse=True)
-    limited_rows = rows[: max(1, limit)]
     logger.info(
         "Loaded %s unique vouchers across %s pages in %.2fs; returning newest %s rows.",
         len(rows),
         page_number,
         perf_counter() - started_at,
-        len(limited_rows),
+        len(rows) if fetch_all else min(len(rows), max(1, limit)),
     )
-    return limited_rows
+    if fetch_all:
+        return rows
+    return rows[: max(1, limit)]
+
+
+def request_voucher_position_page(
+    base_url: str,
+    token: str,
+    limit: int,
+    offset: int,
+) -> list[dict[str, Any]]:
+    payload = sevdesk_request(
+        "GET",
+        base_url,
+        token,
+        "/VoucherPos",
+        params={
+            "limit": max(1, limit),
+            "offset": max(0, offset),
+        },
+    )
+    objects = payload.get("objects", [])
+    if not isinstance(objects, list):
+        return []
+    return [item for item in objects if isinstance(item, dict)]
+
+
+def request_voucher_positions(base_url: str, token: str) -> list[dict[str, Any]]:
+    started_at = perf_counter()
+    rows: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    offset = 0
+    page_size = 200
+    page_number = 0
+
+    logger.info("Loading sevDesk voucher positions for accounting type usage scan.")
+
+    while True:
+        page_number += 1
+        page_started_at = perf_counter()
+        page = request_voucher_position_page(base_url, token, page_size, offset)
+        logger.info(
+            "Fetched voucher position page %s (offset=%s, size=%s) in %.2fs.",
+            page_number,
+            offset,
+            len(page),
+            perf_counter() - page_started_at,
+        )
+        if not page:
+            break
+
+        for item in page:
+            item_id = str(item.get("id", "")).strip()
+            if item_id and item_id in seen_ids:
+                continue
+            if item_id:
+                seen_ids.add(item_id)
+            rows.append(item)
+
+        if len(page) < page_size:
+            break
+        offset += len(page)
+
+    logger.info(
+        "Loaded %s unique voucher positions across %s pages in %.2fs.",
+        len(rows),
+        page_number,
+        perf_counter() - started_at,
+    )
+    return rows
+
+
+def _invoice_sort_key(row: dict[str, Any]) -> tuple[int, float, int]:
+    timestamp = _parse_voucher_timestamp(row.get("invoiceDate")) or _parse_voucher_timestamp(
+        row.get("create")
+    ) or _parse_voucher_timestamp(row.get("update"))
+    item_id = str(row.get("id", "")).strip()
+    try:
+        numeric_id = int(item_id)
+    except ValueError:
+        numeric_id = 0
+    if timestamp is None:
+        return (0, 0.0, numeric_id)
+    return (1, timestamp.timestamp(), numeric_id)
+
+
+def request_invoice_page(
+    base_url: str,
+    token: str,
+    limit: int,
+    offset: int,
+    *,
+    filters: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    params = {
+        "limit": max(1, limit),
+        "offset": max(0, offset),
+        "sort": "-invoiceDate",
+        "depth": "1",
+    }
+    if filters:
+        params.update(filters)
+    payload = sevdesk_request(
+        "GET",
+        base_url,
+        token,
+        "/Invoice",
+        params=params,
+    )
+    objects = payload.get("objects", [])
+    if not isinstance(objects, list):
+        return []
+    return [item for item in objects if isinstance(item, dict)]
+
+
+def request_invoices(
+    base_url: str,
+    token: str,
+    limit: int = 100,
+    *,
+    filters: dict[str, Any] | None = None,
+    fetch_all: bool = False,
+) -> list[dict[str, Any]]:
+    started_at = perf_counter()
+    effective_filters = dict(filters or {})
+    requested_limit = max(1, limit)
+    if "sort" not in effective_filters:
+        effective_filters["sort"] = "-invoiceDate"
+    rows: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    offset = 0
+    effective_page_size = min(200, requested_limit)
+    page_number = 0
+
+    logger.info(
+        "Loading sevDesk invoices for requested limit=%s, page_size=%s, filters=%s, fetch_all=%s.",
+        requested_limit,
+        effective_page_size,
+        effective_filters,
+        fetch_all,
+    )
+
+    while True:
+        page_number += 1
+        page_started_at = perf_counter()
+        page = request_invoice_page(
+            base_url,
+            token,
+            effective_page_size,
+            offset,
+            filters=effective_filters,
+        )
+        logger.info(
+            "Fetched invoice page %s (offset=%s, size=%s) in %.2fs.",
+            page_number,
+            offset,
+            len(page),
+            perf_counter() - page_started_at,
+        )
+        if not page:
+            break
+
+        for item in page:
+            item_id = str(item.get("id", "")).strip()
+            if item_id and item_id in seen_ids:
+                continue
+            if item_id:
+                seen_ids.add(item_id)
+            rows.append(_sanitize_voucher_list_item(item))
+            if len(rows) >= requested_limit:
+                break
+
+        if len(rows) >= requested_limit:
+            break
+        if len(page) < effective_page_size:
+            break
+        offset += len(page)
+
+    rows.sort(key=_invoice_sort_key, reverse=True)
+    logger.info(
+        "Loaded %s unique invoices across %s pages in %.2fs.",
+        len(rows),
+        page_number,
+        perf_counter() - started_at,
+    )
+    return rows[:requested_limit]
+
+
+def request_invoice_by_id(base_url: str, token: str, invoice_id: str) -> dict[str, Any] | None:
+    payload = sevdesk_request(
+        "GET",
+        base_url,
+        token,
+        f"/Invoice/{invoice_id}",
+    )
+    objects = payload.get("objects")
+    if isinstance(objects, dict):
+        return objects
+    if isinstance(objects, list) and objects and isinstance(objects[0], dict):
+        return objects[0]
+    return None
+
+
+def request_invoice_positions(
+    base_url: str,
+    token: str,
+    invoice_id: str,
+    *,
+    page_size: int = 200,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    offset = 0
+    effective_page_size = min(1000, max(1, page_size))
+
+    while True:
+        payload = sevdesk_request(
+            "GET",
+            base_url,
+            token,
+            f"/Invoice/{invoice_id}/getPositions",
+            params={
+                "limit": effective_page_size,
+                "offset": offset,
+                "embed": "part,unity",
+            },
+        )
+        objects = payload.get("objects", [])
+        if not isinstance(objects, list):
+            break
+
+        page = [item for item in objects if isinstance(item, dict)]
+        rows.extend(page)
+
+        if len(page) < effective_page_size:
+            break
+        offset += len(page)
+
+    return rows
+
+
+def save_invoice(base_url: str, token: str, payload: dict[str, Any]) -> dict[str, Any]:
+    return sevdesk_request(
+        "POST",
+        base_url,
+        token,
+        "/Invoice/Factory/saveInvoice",
+        payload=payload,
+    )
 
 
 def request_voucher_by_id(base_url: str, token: str, voucher_id: str) -> dict[str, Any] | None:
@@ -570,6 +816,30 @@ def request_tax_sets(
     return [item for item in objects if isinstance(item, dict)]
 
 
+def request_products(
+    base_url: str,
+    token: str,
+    limit: int,
+    offset: int,
+    sort: str,
+) -> list[dict[str, Any]]:
+    payload = sevdesk_request(
+        "GET",
+        base_url,
+        token,
+        "/Part",
+        params={
+            "limit": max(1, limit),
+            "offset": max(0, offset),
+            "sort": sort,
+        },
+    )
+    objects = payload.get("objects", [])
+    if not isinstance(objects, list):
+        return []
+    return [item for item in objects if isinstance(item, dict)]
+
+
 def request_contacts(
     base_url: str,
     token: str,
@@ -620,6 +890,75 @@ def request_check_account_transactions(
     if not isinstance(objects, list):
         return []
     return [item for item in objects if isinstance(item, dict)]
+
+
+def request_check_account_transaction_by_id(
+    base_url: str,
+    token: str,
+    transaction_id: str,
+) -> dict[str, Any] | None:
+    payload = sevdesk_request(
+        "GET",
+        base_url,
+        token,
+        f"/CheckAccountTransaction/{transaction_id}",
+    )
+    objects = payload.get("objects")
+    if isinstance(objects, dict):
+        return objects
+    if isinstance(objects, list) and objects and isinstance(objects[0], dict):
+        return objects[0]
+    return None
+
+
+def create_check_account_transaction(
+    base_url: str,
+    token: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    response = sevdesk_request(
+        "POST",
+        base_url,
+        token,
+        "/CheckAccountTransaction",
+        payload=payload,
+    )
+    objects = response.get("objects")
+    if isinstance(objects, dict):
+        return objects
+    if isinstance(objects, list) and objects and isinstance(objects[0], dict):
+        return objects[0]
+    raise RuntimeError("sevDesk did not return the created check account transaction.")
+
+
+def transfer_check_account(
+    base_url: str,
+    token: str,
+    check_account_id: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    return sevdesk_request(
+        "PUT",
+        base_url,
+        token,
+        f"/CheckAccount/{check_account_id}/transfer",
+        payload=payload,
+    )
+
+
+def update_check_account_transaction(
+    base_url: str,
+    token: str,
+    transaction_id: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    return sevdesk_request(
+        "PUT",
+        base_url,
+        token,
+        f"/CheckAccountTransaction/{transaction_id}",
+        payload=payload,
+    )
 
 
 def fetch_all_accounting_types(
@@ -700,6 +1039,28 @@ def fetch_all_tax_sets(
 
     while True:
         page = request_tax_sets(base_url, token, effective_page_size, offset, sort)
+        if not page:
+            break
+        rows.extend(page)
+        if len(page) < effective_page_size:
+            break
+        offset += len(page)
+
+    return rows
+
+
+def fetch_all_products(
+    base_url: str,
+    token: str,
+    page_size: int,
+    sort: str = "id",
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    offset = 0
+    effective_page_size = min(1000, max(1, page_size))
+
+    while True:
+        page = request_products(base_url, token, effective_page_size, offset, sort)
         if not page:
             break
         rows.extend(page)

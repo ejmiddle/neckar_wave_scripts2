@@ -496,9 +496,10 @@ stored_preprocessed_dir = str(st.session_state.get("lieferscheine_preprocessed_d
 if not stored_preprocessed_dir:
     stored_preprocessed_dir = str(_preprocessed_output_dir())
 candidate_dir = Path(stored_preprocessed_dir)
+preprocessed_inputs: list[dict[str, Any]] = []
 if candidate_dir.exists():
     preprocessed_inputs = _discover_preprocessed_inputs(candidate_dir)
-    if preprocessed_inputs:
+    if preprocessed_inputs and image_source != "Google Drive":
         available_images = sorted(
             preprocessed_inputs,
             key=lambda item: (
@@ -508,6 +509,11 @@ if candidate_dir.exists():
         )
         is_using_preprocessed_inputs = True
         preprocessed_base_dir = candidate_dir
+    elif preprocessed_inputs and image_source == "Google Drive":
+        logger.info(
+            "Preprocessed inputs exist but are ignored for live Google Drive source path=%s",
+            candidate_dir,
+        )
 preprocess_col, clean_preprocess_col = st.columns(2)
 preprocess_pdfs_clicked = preprocess_col.button(
     "Preprocess Dateien",
@@ -588,6 +594,10 @@ if available_images:
         st.caption(f"{len(available_images)} Bilder aus Preprocessing-Ordner: {preprocessed_base_dir}")
     elif image_source == "Google Drive":
         st.caption(f"{len(available_images)} Dateien (Bilder + PDFs) in Google Drive gefunden.")
+        if preprocessed_inputs:
+            st.caption(
+                "Vorhandene Preprocessing-Daten werden bei Google Drive nicht automatisch verwendet."
+            )
     else:
         st.caption(f"{len(available_images)} Dateien (Bilder + PDFs) gefunden in: {LIEFERSCHEINE_DIR}")
 

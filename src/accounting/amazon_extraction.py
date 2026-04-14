@@ -20,6 +20,7 @@ from src.accounting.state import (
 from src.amazon_accounting_llm import build_document_user_content, extract_amazon_accounting_data
 from src.amazon_accounting_prompt_config import DEFAULT_SYSTEM_PROMPT
 from src.lieferscheine_sources import split_pdf_bytes_to_page_images
+from src.logging_config import logger
 
 
 def extract_first_15_digits(value: Any) -> str:
@@ -32,7 +33,15 @@ def extract_first_15_digits(value: Any) -> str:
 def extract_amazon_order_number(value: Any) -> str:
     import re
 
-    match = re.search(r"(\d{3}-\d{7}-\d{7})(?=\s+AMZN\b)", str(value or ""))
+    text = str(value or "")
+    match = re.search(
+        r"(?<!\d)(\d{3}-\d{7}-\d{7})(?=\s+(?:AMZN\b|Amazon\.de\b|amzn\.com/pmts\b))",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if match:
+        return match.group(1)
+    match = re.search(r"(?<!\d)(\d{3}-\d{7}-\d{7})(?!\d)", text)
     if match:
         return match.group(1)
     return ""
@@ -223,26 +232,48 @@ def find_receipt_pdfs(order_number: str) -> list[str]:
     if not order_number or not AMAZON_RECEIPTS_DIR.exists():
         return []
 
-    order_dir = AMAZON_RECEIPTS_DIR / order_number
-    if order_dir.is_dir():
-        return sorted(
-            str(path)
-            for path in order_dir.rglob("*.pdf")
-            if path.is_file() and path.stem != order_number
-        )
-
-    return sorted(
-        str(path)
+    wanted = order_number.lower()
+    matched_paths = [
+        path
         for path in AMAZON_RECEIPTS_DIR.rglob("*.pdf")
-        if order_number in path.name and path.stem != order_number
+        if path.is_file() and wanted in path.name.lower()
+    ]
+
+    if not matched_paths:
+        logger.warning(
+            "No Amazon receipt PDFs found for order_number=%s receipts_dir=%s",
+            order_number,
+            AMAZON_RECEIPTS_DIR,
+        )
+        return []
+
+    matched_list = sorted(str(path) for path in matched_paths)
+    logger.info(
+        "Found %s Amazon receipt PDF(s) for order_number=%s",
+        len(matched_list),
+        order_number,
     )
+    return matched_list
 
 
 def build_selected_pdf_matches(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     matches: list[dict[str, Any]] = []
     for row in rows:
         formatted = format_amazon_payment_row(row)
+        if not formatted["orderNumber"]:
+            logger.warning(
+                "Amazon booking has no order number, skipping receipt lookup booking_id=%s booking_ids=%s",
+                formatted["id"],
+                row.get("bookingIds", [formatted["id"]]),
+            )
         pdf_matches = find_receipt_pdfs(formatted["orderNumber"])
+        if not pdf_matches:
+            logger.warning(
+                "Amazon booking has no matching receipt PDFs booking_id=%s order_number=%s booking_ids=%s",
+                formatted["id"],
+                formatted["orderNumber"] or "-",
+                row.get("bookingIds", [formatted["id"]]),
+            )
         matches.append(
             {
                 "id": formatted["id"],
@@ -266,7 +297,7 @@ def extract_accounting_data_from_pdf(
     provider: str,
     model_name: str,
     api_key: str,
-) -> dict[str, Any]:
+) -> list[dict[str, Any]]:
     pdf_file = Path(pdf_path)
     pdf_bytes = pdf_file.read_bytes()
     page_images = split_pdf_bytes_to_page_images(
@@ -278,36 +309,68 @@ def extract_accounting_data_from_pdf(
     )
     if not page_images:
         raise RuntimeError(f"PDF enthaelt keine verarbeitbaren Seiten: {pdf_file}")
-    user_content = build_document_user_content(page_images)
-    extracted = extract_amazon_accounting_data(
-        provider=provider,
-        api_key=api_key,
-        model_name=model_name,
-        user_content=user_content,
-        system_prompt_base=DEFAULT_SYSTEM_PROMPT,
+    extraction_results: list[dict[str, Any]] = []
+    logger.info(
+        "Amazon receipt page extraction started pdf=%s pages=%s provider=%s model=%s",
+        pdf_file,
+        len(page_images),
+        provider,
+        model_name,
     )
-    return {
-        "pdfPath": str(pdf_file),
-        "provider": provider,
-        "model": model_name,
-        "pageCount": len(page_images),
-        "extracted": extracted,
-    }
+    for page_number, page_image in enumerate(page_images, start=1):
+        logger.info(
+            "Amazon receipt page extraction requested pdf=%s page=%s/%s image=%s",
+            pdf_file,
+            page_number,
+            len(page_images),
+            page_image[1],
+        )
+        user_content = build_document_user_content([page_image])
+        extracted = extract_amazon_accounting_data(
+            provider=provider,
+            api_key=api_key,
+            model_name=model_name,
+            user_content=user_content,
+            system_prompt_base=DEFAULT_SYSTEM_PROMPT,
+        )
+        extraction_results.append(
+            {
+                "pdfPath": str(pdf_file),
+                "provider": provider,
+                "model": model_name,
+                "pageCount": len(page_images),
+                "pageNumber": page_number,
+                "pageName": page_image[1],
+                "sourceKey": f"{pdf_file}#page={page_number}",
+                "extracted": extracted,
+            }
+        )
+    logger.info(
+        "Amazon receipt page extraction finished pdf=%s extracted_pages=%s",
+        pdf_file,
+        len(extraction_results),
+    )
+    return extraction_results
 
 
 def build_accounting_comparison_rows(
     booking_row: dict[str, Any],
     extracted: dict[str, Any],
+    *,
+    compare_amount_to_booking: bool = True,
 ) -> list[dict[str, Any]]:
-    formatted_booking = format_amazon_payment_row(booking_row)
     booking_date_display = _format_booking_date_display(booking_row)
     return [
         {
-            "field": "Betrag",
+            "field": "Betrag" if compare_amount_to_booking else "Betrag (Seite)",
             "booking": format_currency_value(aggregate_amazon_booking_amount(booking_row)),
             "pdf": format_currency_value(extracted.get("amount")),
-            "match": format_match_value(
-                compare_amounts(aggregate_amazon_booking_amount(booking_row), extracted.get("amount"))
+            "match": (
+                format_match_value(
+                    compare_amounts(aggregate_amazon_booking_amount(booking_row), extracted.get("amount"))
+                )
+                if compare_amount_to_booking
+                else "-"
             ),
         },
         {
@@ -363,7 +426,7 @@ def build_aggregate_accounting_comparison_rows(
             "match": "-",
         },
         {
-            "field": "Anzahl PDFs",
+            "field": "Anzahl Seiten-Belege",
             "booking": "-",
             "pdf": str(len(extraction_results)),
             "match": "-",
