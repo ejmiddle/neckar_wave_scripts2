@@ -192,6 +192,7 @@ def format_latest_invoice_row(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": str(row.get("id", "")),
         "nummer": str(row.get("invoiceNumber") or row.get("number") or row.get("id") or "-"),
+        "kunde": _invoice_contact_name(row) or "-",
         "angelegt": str(row.get("create") or row.get("update") or "-"),
         "rechnungsdatum": str(row.get("invoiceDate") or row.get("voucherDate") or "-"),
         "betrag": parse_amount_value(_invoice_amount_value(row)),
@@ -199,7 +200,6 @@ def format_latest_invoice_row(row: dict[str, Any]) -> dict[str, Any]:
         "storno": "Ja" if _invoice_is_storno(row) else "Nein",
         "subinfo": _invoice_subinfo(row),
         "beschreibung": _invoice_description(row),
-        "kunde": _invoice_contact_name(row) or "-",
         "status": row.get("status", "-"),
     }
 

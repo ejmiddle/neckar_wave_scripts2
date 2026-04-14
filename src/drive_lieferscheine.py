@@ -22,10 +22,11 @@ DRIVE_LIEFERSCHEIN_MIME_TYPES = {
 # Backwards-compatible alias for existing imports/usages.
 DRIVE_IMAGE_MIME_TYPES = DRIVE_LIEFERSCHEIN_MIME_TYPES
 DRIVE_SHORTCUT_MIME_TYPE = "application/vnd.google-apps.shortcut"
-DRIVE_DEFAULT_LIEFERSCHEINE_FOLDER_NAME = "Scan_Ausgangslieferscheine"
+DRIVE_DEFAULT_LIEFERSCHEINE_FOLDER_NAME = "Lieferscheinthemen/Scan_Ausgangslieferscheine"
 DRIVE_FOLDER_MIME_TYPE = "application/vnd.google-apps.folder"
 DRIVE_AUTH_SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 DRIVE_CACHE_TTL_SECONDS = 300
+DRIVE_LOCAL_SECRET_DIR = Path("secrets") / "google-drive"
 
 
 def _is_truthy(value: Any) -> bool:
@@ -168,11 +169,20 @@ def _get_drive_client_secret_file(*, environ: Mapping[str, str] | None = None) -
     configured = _read_str(env, "GOOGLE_CLIENT_SECRET")
     if configured and Path(configured).exists():
         return configured
-    if Path("credentials.json").exists():
-        return "credentials.json"
-    candidates = sorted(glob.glob("client_secret*.json"))
-    if candidates:
-        return candidates[0]
+    for candidate in (
+        DRIVE_LOCAL_SECRET_DIR / "client_secret.json",
+        DRIVE_LOCAL_SECRET_DIR / "credentials.json",
+        Path("credentials.json"),
+    ):
+        if candidate.exists():
+            return str(candidate)
+    for pattern in (
+        str(DRIVE_LOCAL_SECRET_DIR / "client_secret*.json"),
+        "client_secret*.json",
+    ):
+        candidates = sorted(glob.glob(pattern))
+        if candidates:
+            return candidates[0]
     return None
 
 
@@ -181,7 +191,10 @@ def _get_drive_token_file(*, environ: Mapping[str, str] | None = None) -> str:
     configured = _read_str(env, "GOOGLE_DRIVE_TOKEN_FILE")
     if configured:
         return configured
-    return "token.json"
+    for candidate in (DRIVE_LOCAL_SECRET_DIR / "token.json", Path("token.json")):
+        if candidate.exists():
+            return str(candidate)
+    return str(DRIVE_LOCAL_SECRET_DIR / "token.json")
 
 
 def _get_drive_oauth_mode(*, environ: Mapping[str, str] | None = None) -> str:
@@ -352,14 +365,16 @@ def build_drive_credentials(
             logger.exception("Google OAuth browser flow failed.")
     else:
         logger.error(
-            "Google OAuth client secret not found. Checked GOOGLE_CLIENT_SECRET and client_secret*.json/credentials.json in working directory %s",
+            "Google OAuth client secret not found. Checked GOOGLE_CLIENT_SECRET, "
+            "secrets/google-drive/client_secret*.json, and credentials.json in working directory %s",
             os.getcwd(),
         )
 
     raise RuntimeError(
         "Google Drive Auth fehlt. Entweder Service Account in secrets/"
         "GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON setzen oder OAuth-Dateien bereitstellen "
-        "(token.json plus credentials.json/client_secret*.json)."
+        "(secrets/google-drive/token.json plus secrets/google-drive/client_secret.json "
+        "oder GOOGLE_CLIENT_SECRET/GOOGLE_DRIVE_TOKEN_FILE setzen)."
     )
 
 
@@ -424,6 +439,99 @@ def _find_drive_folder_id_by_name(*, service: Any, folder_name: str) -> str | No
     return None
 
 
+def _find_drive_folder_ids_by_name(
+    *,
+    service: Any,
+    folder_name: str,
+    parent_id: str | None = None,
+) -> list[tuple[str, str]]:
+    normalized_name = normalize_drive_text(folder_name)
+    if not normalized_name:
+        return []
+
+    escaped_name = normalized_name.replace("\\", "\\\\").replace("'", "\\'")
+    query_parts = [
+        f"mimeType='{DRIVE_FOLDER_MIME_TYPE}'",
+        "trashed = false",
+        f"name = '{escaped_name}'",
+    ]
+    if parent_id:
+        query_parts.insert(0, f"'{parent_id}' in parents")
+
+    matches: list[tuple[str, str]] = []
+    page_token = None
+    while True:
+        resp = (
+            service.files()
+            .list(
+                q=" and ".join(query_parts),
+                fields="nextPageToken, files(id,name,mimeType)",
+                pageSize=1000,
+                pageToken=page_token,
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True,
+            )
+            .execute()
+        )
+        for folder in resp.get("files", []):
+            folder_id = folder.get("id")
+            folder_label = folder.get("name")
+            if (
+                isinstance(folder_id, str)
+                and folder_id.strip()
+                and isinstance(folder_label, str)
+                and folder_label.strip()
+            ):
+                matches.append((folder_id.strip(), folder_label.strip()))
+        page_token = resp.get("nextPageToken")
+        if not page_token:
+            break
+    return matches
+
+
+def _find_drive_folder_id_by_path(*, service: Any, folder_path: str) -> tuple[str, str] | None:
+    normalized_path = normalize_drive_text(folder_path)
+    if not normalized_path or "/" not in normalized_path:
+        return None
+
+    path_parts = [part.strip() for part in normalized_path.split("/") if part.strip()]
+    if not path_parts:
+        return None
+
+    current_matches: list[tuple[str, str]] = _find_drive_folder_ids_by_name(
+        service=service,
+        folder_name=path_parts[0],
+    )
+    if not current_matches:
+        return None
+
+    resolved_path_labels = [path_parts[0]] * len(current_matches)
+    for part in path_parts[1:]:
+        next_matches: list[tuple[str, str]] = []
+        next_labels: list[str] = []
+        for (parent_id, _parent_name), path_label in zip(current_matches, resolved_path_labels):
+            child_matches = _find_drive_folder_ids_by_name(
+                service=service,
+                folder_name=part,
+                parent_id=parent_id,
+            )
+            for child_match in child_matches:
+                next_matches.append(child_match)
+                next_labels.append(f"{path_label}/{part}")
+        if not next_matches:
+            return None
+        current_matches = next_matches
+        resolved_path_labels = next_labels
+
+    if len(current_matches) > 1:
+        raise RuntimeError(
+            f"Mehrere Ordner mit Pfad '{normalized_path}' gefunden. Bitte die Ordner-ID verwenden."
+        )
+
+    resolved_id, _resolved_name = current_matches[0]
+    return resolved_id, f"{resolved_path_labels[0]} (ID: {resolved_id})"
+
+
 def _resolve_drive_folder_id_if_accessible(
     *,
     service: Any,
@@ -485,6 +593,10 @@ def resolve_drive_folder_id(
     if resolved_by_id:
         return resolved_by_id
 
+    resolved_by_path = _find_drive_folder_id_by_path(service=service, folder_path=trimmed)
+    if resolved_by_path:
+        return resolved_by_path
+
     resolved_id = _find_drive_folder_id_by_name(service=service, folder_name=trimmed)
     if resolved_id:
         return resolved_id, f"{trimmed} (ID: {resolved_id})"
@@ -503,6 +615,15 @@ def discover_drive_images(
         return []
 
     service = build_drive_service(secrets=secrets, environ=environ)
+    resolved_folder = _resolve_drive_folder_id_if_accessible(
+        service=service,
+        folder_id=folder_id,
+    )
+    if not resolved_folder:
+        raise RuntimeError(
+            f"Der angegebene Google Drive-Ordner existiert nicht oder ist nicht zugreifbar: {folder_id}"
+        )
+
     image_query = " or ".join(
         f"mimeType='{mime_type}'" for mime_type in sorted(DRIVE_LIEFERSCHEIN_MIME_TYPES)
     )

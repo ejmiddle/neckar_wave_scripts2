@@ -443,7 +443,7 @@ if image_source == "Google Drive":
                 environ=os.environ,
             )
             if not resolved_folder_id:
-                st.error(f"Folder nicht gefunden: {drive_folder_id.strip()}")
+                st.info(f"Hinweis: Google Drive Ordner nicht gefunden: {drive_folder_id.strip()}")
                 logger.warning(
                     "Drive folder not found: %s (recursive=%s)",
                     drive_folder_id.strip(),
@@ -468,6 +468,15 @@ if image_source == "Google Drive":
                     len(available_images),
                     resolved_folder_id,
                 )
+        except RuntimeError as exc:
+            logger.warning(
+                "Drive folder note in page context: folder=%s recursive=%s error=%s",
+                drive_folder_id.strip(),
+                drive_recursive,
+                exc,
+            )
+            st.info(f"Hinweis: {exc}")
+            available_images = []
         except Exception as exc:
             logger.exception(
                 "Google Drive failed in page context: folder=%s recursive=%s",

@@ -27,9 +27,14 @@ dist/
 # Local runtime and secrets
 .env
 .env.*
+secrets/
+client_secret*.json
+credentials.json
+token.json
 logs/
 *.log
 .task/
+workspace/
 
 # Existing project-specific ignores
 uv.lock

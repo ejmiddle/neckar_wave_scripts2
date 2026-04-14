@@ -21,13 +21,12 @@ COPY api /app/api
 COPY scripts /app/scripts
 COPY data /app/data
 COPY .streamlit /app/.streamlit
-COPY .env /app/.env
 COPY logging.conf /app/logging.conf
-COPY client_secret*.json /app/
-COPY token.json /app/token.json
-RUN sh -c 'for f in /app/credentials.json /app/client_secret*.json; do if [ -f \"$f\" ]; then ln -sf \"$f\" /app/client_secret.json; break; fi; done'
-ENV GOOGLE_CLIENT_SECRET=/app/client_secret.json
-ENV GOOGLE_DRIVE_TOKEN_FILE=/app/token.json
+# Bake the Google OAuth client secret into the image by design; keep the token external.
+RUN mkdir -p /app/secrets/google-drive
+COPY secrets/google-drive/client_secret.json /app/secrets/google-drive/client_secret.json
+ENV GOOGLE_CLIENT_SECRET=/app/secrets/google-drive/client_secret.json
+ENV GOOGLE_DRIVE_TOKEN_FILE=/app/secrets/google-drive/token.json
 
 # App expects app_paths and app_files.logging_config on the import path.
 RUN mkdir -p /app/app_files \
