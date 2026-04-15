@@ -10,13 +10,34 @@ The current workflow behavior is:
 
 - Build with Docker Buildx.
 - Log in to GHCR using the repository-scoped `GITHUB_TOKEN`.
-- Publish the image as `ghcr.io/<repo-owner>/streamlit-hello:latest`.
+- Publish the main Streamlit image as `ghcr.io/<repo-owner>/neckarwave-scripts-main:latest`.
 
-Important local/runtime notes:
+Related image names used by the repo:
 
-- The Google OAuth client secret is intentionally baked into the image from `secrets/google-drive/client_secret.json`.
-- The OAuth token is not baked in; it is expected at `secrets/google-drive/token.json` at runtime or mounted into the container.
-- Do not commit files from `secrets/`.
+- `ghcr.io/<repo-owner>/neckarwave-scripts-main:latest` for the main Streamlit app.
+- `ghcr.io/<repo-owner>/neckarwave-scripts-accounting:latest` for the accounting Streamlit app.
+- `ghcr.io/<repo-owner>/neckarwave-scripts-fastapi:latest` for the FastAPI backend.
+
+## Secrets
+
+The Google Drive auth flow uses two local files:
+
+- `secrets/google-drive/client_secret.json`
+- `secrets/google-drive/token.json`
+
+How they are used:
+
+- `client_secret.json` is the Google OAuth client secret. It is intentionally copied into the Docker image by [`Dockerfile`](/Users/andreasschmidt/CodingProjects/neckarwave_scripts/Dockerfile).
+- `token.json` is the OAuth token cache. It is runtime-only and should stay local or be mounted into the container.
+- Both paths are ignored by git through [`.gitignore`](/Users/andreasschmidt/CodingProjects/neckarwave_scripts/.gitignore).
+
+Behavior and overrides:
+
+- The app looks for `GOOGLE_CLIENT_SECRET` and `GOOGLE_DRIVE_TOKEN_FILE` first.
+- If those are not set, it falls back to `secrets/google-drive/client_secret.json` and `secrets/google-drive/token.json`.
+- A service account can still be supplied separately via `GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON` in environment variables or `st.secrets`.
+
+Do not commit any files under `secrets/`. If you need to regenerate the OAuth token, delete `secrets/google-drive/token.json` and run the Drive auth flow again.
 
 ## Local Setup Notes
 

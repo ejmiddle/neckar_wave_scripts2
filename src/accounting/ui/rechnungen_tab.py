@@ -8,7 +8,7 @@ from typing import Any
 import streamlit as st
 
 from src.accounting.common import base_url, ensure_token, parse_iso_date, report_error
-from src.accounting.master_data import load_stored_products
+from src.accounting.master_data import export_products, load_stored_products
 from src.accounting.ui.displays import show_invoices
 from src.accounting.ui.filter_utils import (
     build_status_filter_options,
@@ -30,6 +30,7 @@ from src.sevdesk.customer_list import (
     RECHNUNGEN_CUSTOMERS_PATH,
     add_rechnungen_customer_name,
     load_rechnungen_customer_names,
+    remove_rechnungen_customer_name,
 )
 
 RECHNUNGEN_ROWS_KEY = "sevdesk_rechnungen_rows"
@@ -49,7 +50,11 @@ RECHNUNGEN_EDITOR_NEW_POSITIONS_KEY = "sevdesk_rechnungen_editor_new_positions"
 RECHNUNGEN_EDITOR_NEW_POSITION_COUNTER_KEY = "sevdesk_rechnungen_editor_new_position_counter"
 RECHNUNGEN_LIEFERSCHEINE_JSONS_KEY = "sevdesk_rechnungen_lieferscheine_folder_jsons"
 RECHNUNGEN_EDITOR_POPULATION_STATE_KEY = "sevdesk_rechnungen_editor_population_state"
+RECHNUNGEN_EDITOR_TAX_RATE_OVERRIDE_KEY = "sevdesk_rechnungen_editor_tax_rate_override"
+RECHNUNGEN_EDITOR_DISCOUNT_OVERRIDE_KEY = "sevdesk_rechnungen_editor_discount_override"
 RECHNUNGEN_CUSTOMER_NEW_NAME_KEY = "sevdesk_rechnungen_customer_new_name"
+RECHNUNGEN_CUSTOMER_DELETE_NAME_KEY = "sevdesk_rechnungen_customer_delete_name"
+RECHNUNGEN_PRODUCTS_ROWS_KEY = "sevdesk_products_rows"
 RECHNUNGEN_DEFAULT_LOAD_LIMIT = 100
 RECHNUNGEN_FOLDER_MATCH_MIN_SCORE = 0.45
 RECHNUNGEN_PRODUCT_MATCH_MIN_SCORE = 0.7
@@ -145,12 +150,38 @@ def _draft_invoice_label(row: dict[str, Any]) -> str:
     return f"{invoice_number} | {invoice_date} | {amount} EUR | {row.get('id')}"
 
 
+def _refresh_products_cache() -> list[dict[str, Any]] | None:
+    token = ensure_token()
+    if not token:
+        return None
+
+    try:
+        with st.spinner("Produkte werden aus sevDesk aktualisiert..."):
+            products = export_products(base_url(), token)
+    except Exception as exc:
+        report_error(
+            f"Failed to load products: {exc}",
+            log_message="Failed to load products",
+            exc_info=True,
+        )
+        return None
+
+    st.session_state[RECHNUNGEN_PRODUCTS_ROWS_KEY] = products
+    return products
+
+
 def _product_label(row: dict[str, Any]) -> str:
     article_number = str(row.get("articleNumber", "")).strip()
     name = str(row.get("name", "")).strip() or str(row.get("description", "")).strip()
     if article_number and name:
         return f"{article_number} | {name}"
     return article_number or name or str(row.get("id", "")).strip()
+
+
+def _product_sort_key(row: dict[str, Any]) -> tuple[str, str, str]:
+    name = str(row.get("name", "")).strip() or str(row.get("description", "")).strip()
+    article_number = str(row.get("articleNumber", "")).strip()
+    return (name.casefold(), article_number.casefold(), str(row.get("id", "")).strip())
 
 
 def _normalize_match_text(value: Any) -> str:
@@ -501,6 +532,20 @@ def _product_price_value(product: dict[str, Any], show_net: bool) -> float | Non
     return None
 
 
+def _product_tax_rate_value(product: dict[str, Any] | None) -> float | None:
+    if not isinstance(product, dict):
+        return None
+    for key in ("taxRate", "taxRateId"):
+        value = product.get(key)
+        if value in (None, ""):
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def _fallback_unity(position: dict[str, Any] | None, positions: list[dict[str, Any]]) -> dict[str, Any]:
     if isinstance(position, dict):
         unity = position.get("unity")
@@ -590,6 +635,8 @@ def _clean_invoice_position_for_save(
     quantity: float,
     fallback_unity: dict[str, Any],
     show_net: bool,
+    tax_rate_override: float | None = None,
+    discount_override: float | None = None,
 ) -> dict[str, Any]:
     cleaned = deepcopy(position)
     for key in (
@@ -648,7 +695,23 @@ def _clean_invoice_position_for_save(
             except (TypeError, ValueError):
                 pass
 
-    tax_rate = _position_tax_rate_value(position, {"taxRate": position.get("taxRate")})
+    # sevDesk calculates VAT and visible rebates from the line items, so preserve
+    # line-level discount settings and prefer the selected product's tax rate.
+    for key in ("isPercentage", "discountedValue"):
+        value = position.get(key)
+        if value not in (None, ""):
+            cleaned[key] = value
+    cleaned["isPercentage"] = "1"
+    if discount_override is not None:
+        cleaned["discountedValue"] = str(discount_override)
+    elif "discountedValue" not in cleaned:
+        cleaned["discountedValue"] = "0"
+
+    tax_rate = tax_rate_override
+    if tax_rate is None:
+        tax_rate = _product_tax_rate_value(selected_product)
+    if tax_rate is None:
+        tax_rate = _position_tax_rate_value(position, {"taxRate": position.get("taxRate")})
     cleaned["taxRate"] = tax_rate
 
     return cleaned
@@ -670,6 +733,9 @@ def _build_invoice_position_update_payload(
     invoice: dict[str, Any],
     position_specs: list[dict[str, Any]],
     deleted_position_ids: list[str] | None = None,
+    *,
+    tax_rate_override: float | None = None,
+    discount_override: float | None = None,
 ) -> dict[str, Any]:
     invoice_id = str(invoice.get("id", "")).strip()
     if not invoice_id:
@@ -702,6 +768,8 @@ def _build_invoice_position_update_payload(
                 quantity=float(quantity or 1.0),
                 fallback_unity=position_fallback_unity,
                 show_net=show_net,
+                tax_rate_override=tax_rate_override,
+                discount_override=discount_override,
             )
         )
 
@@ -888,6 +956,10 @@ def render_rechnungen_section() -> None:
     if current_customer not in customer_options:
         st.session_state[RECHNUNGEN_CUSTOMER_KEY] = customer_options[0]
     selected_customer = str(st.session_state.get(RECHNUNGEN_CUSTOMER_KEY, customer_options[0]))
+    if RECHNUNGEN_EDITOR_TAX_RATE_OVERRIDE_KEY not in st.session_state:
+        st.session_state[RECHNUNGEN_EDITOR_TAX_RATE_OVERRIDE_KEY] = 7.0
+    if RECHNUNGEN_EDITOR_DISCOUNT_OVERRIDE_KEY not in st.session_state:
+        st.session_state[RECHNUNGEN_EDITOR_DISCOUNT_OVERRIDE_KEY] = 20.0
     with st.expander("Kundenliste verwalten", expanded=False):
         st.caption(f"Gespeichert in `{RECHNUNGEN_CUSTOMERS_PATH}`")
         with st.form("sevdesk_rechnungen_customer_list_form", clear_on_submit=True):
@@ -914,6 +986,58 @@ def render_rechnungen_section() -> None:
                 )
                 st.session_state[RECHNUNGEN_CUSTOMER_KEY] = canonical_customer_name
                 st.rerun()
+
+        if customer_options:
+            delete_customer_default = st.session_state.get(
+                RECHNUNGEN_CUSTOMER_DELETE_NAME_KEY,
+                customer_options[0],
+            )
+            if delete_customer_default not in customer_options:
+                delete_customer_default = customer_options[0]
+                st.session_state[RECHNUNGEN_CUSTOMER_DELETE_NAME_KEY] = delete_customer_default
+
+            customer_to_delete = st.selectbox(
+                "Kunde zum Entfernen",
+                options=customer_options,
+                index=customer_options.index(delete_customer_default),
+                key=RECHNUNGEN_CUSTOMER_DELETE_NAME_KEY,
+                width="stretch",
+            )
+            delete_customer_clicked = st.button(
+                "Aus Kundenliste entfernen",
+                key="sevdesk_rechnungen_customer_delete_button",
+                width="stretch",
+            )
+            if delete_customer_clicked:
+                updated_customer_options = remove_rechnungen_customer_name(customer_to_delete)
+                if not updated_customer_options:
+                    st.session_state.pop(RECHNUNGEN_CUSTOMER_KEY, None)
+                    st.session_state.pop(RECHNUNGEN_CUSTOMER_DELETE_NAME_KEY, None)
+                    st.warning("Die Kundenliste ist jetzt leer.")
+                else:
+                    if st.session_state.get(RECHNUNGEN_CUSTOMER_KEY) not in updated_customer_options:
+                        st.session_state[RECHNUNGEN_CUSTOMER_KEY] = updated_customer_options[0]
+                st.rerun()
+
+        settings_col1, settings_col2 = st.columns(2)
+        with settings_col1:
+            st.number_input(
+                "Umsatzsteuer %",
+                min_value=0.0,
+                max_value=100.0,
+                step=1.0,
+                key=RECHNUNGEN_EDITOR_TAX_RATE_OVERRIDE_KEY,
+                help="Default for Rechnungsverwaltung payloads.",
+            )
+        with settings_col2:
+            st.number_input(
+                "Rabatt %",
+                min_value=0.0,
+                max_value=100.0,
+                step=1.0,
+                key=RECHNUNGEN_EDITOR_DISCOUNT_OVERRIDE_KEY,
+                help="Default for Rechnungsverwaltung payloads.",
+            )
 
     draft_rows = [
         row
@@ -996,7 +1120,11 @@ def render_rechnungen_section() -> None:
                 if isinstance(row, dict)
                 and str(row.get("id", "")).strip() not in deleted_position_ids
             ]
-            products = load_stored_products()
+            products = st.session_state.get(RECHNUNGEN_PRODUCTS_ROWS_KEY)
+            if products is None:
+                products = load_stored_products()
+                if products:
+                    st.session_state[RECHNUNGEN_PRODUCTS_ROWS_KEY] = products
             if RECHNUNGEN_EDITOR_NEW_POSITIONS_KEY not in st.session_state:
                 st.session_state[RECHNUNGEN_EDITOR_NEW_POSITIONS_KEY] = []
             if RECHNUNGEN_EDITOR_NEW_POSITION_COUNTER_KEY not in st.session_state:
@@ -1024,13 +1152,23 @@ def render_rechnungen_section() -> None:
                 st.session_state.get(RECHNUNGEN_EDITOR_NEW_POSITIONS_KEY, [])
             )
             visible_position_count = len(base_positions) + len(pending_new_positions)
-            info_col1, info_col2 = st.columns([1.6, 1])
+            info_col1, info_col2, info_col3 = st.columns([1.6, 1, 1])
             with info_col1:
                 st.caption(
                     f"Bearbeite Rechnung `{selected_invoice.get('invoiceNumber', selected_invoice_id)}` mit {visible_position_count} Positionen."
                 )
             with info_col2:
                 st.caption(f"{len(products)} Produkte geladen.")
+            with info_col3:
+                if st.button(
+                    "Produkte aktualisieren",
+                    key=f"sevdesk_rechnung_refresh_products_{selected_invoice_id}",
+                    width="stretch",
+                ):
+                    refreshed_products = _refresh_products_cache()
+                    if refreshed_products is not None:
+                        st.success(f"{len(refreshed_products)} Produkte aktualisiert.")
+                        st.rerun()
             if not products:
                 st.info(
                     "Keine sevDesk-Produkte gefunden. Lade zuerst die Produktliste in Accounting MD."
@@ -1040,7 +1178,7 @@ def render_rechnungen_section() -> None:
                     st.info("Die ausgewählte Rechnung hat keine Positionen.")
                 products_by_id = _product_by_id(products)
                 products_by_label = _product_by_label(products)
-                product_labels = sorted(products_by_label.keys())
+                product_labels = [_product_label(product) for product in sorted(products, key=_product_sort_key)]
 
                 folder_jsons = st.session_state.get(RECHNUNGEN_LIEFERSCHEINE_JSONS_KEY)
                 invoice_customer_name = _invoice_customer_name(selected_invoice) or selected_customer
@@ -1294,6 +1432,12 @@ def render_rechnungen_section() -> None:
                         selected_invoice,
                         position_specs,
                         deleted_position_ids=list(deleted_position_ids),
+                        tax_rate_override=float(
+                            st.session_state.get(RECHNUNGEN_EDITOR_TAX_RATE_OVERRIDE_KEY, 7.0)
+                        ),
+                        discount_override=float(
+                            st.session_state.get(RECHNUNGEN_EDITOR_DISCOUNT_OVERRIDE_KEY, 20.0)
+                        ),
                     )
                 except Exception as exc:
                     st.error(f"Update payload could not be built: {exc}")

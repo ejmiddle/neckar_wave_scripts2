@@ -136,3 +136,24 @@ def add_rechnungen_customer_name(
 
     customer_names.append(normalized_customer_name)
     return save_rechnungen_customer_names(customer_names, path=path)
+
+
+def remove_rechnungen_customer_name(
+    customer_name: str,
+    *,
+    path: Path = RECHNUNGEN_CUSTOMERS_PATH,
+) -> list[str]:
+    normalized_customer_name = _normalize_customer_name(customer_name)
+    if not normalized_customer_name:
+        return load_rechnungen_customer_names(path=path)
+
+    customer_names = load_rechnungen_customer_names(path=path)
+    filtered_customer_names = [
+        name
+        for name in customer_names
+        if _casefold_name(name) != _casefold_name(normalized_customer_name)
+    ]
+    if len(filtered_customer_names) == len(customer_names):
+        return customer_names
+
+    return save_rechnungen_customer_names(filtered_customer_names, path=path)

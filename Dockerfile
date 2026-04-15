@@ -35,8 +35,8 @@ RUN mkdir -p /app/app_files \
 
 ENV PYTHONPATH=/app:/app/src
 ENV STREAMLIT_APP_FILE=${STREAMLIT_APP_FILE}
-ENV STREAMLIT_SERVER_PORT=8080
+ENV STREAMLIT_SERVER_PORT=8501
 VOLUME ["/app/data"]
 
-EXPOSE 8080
+EXPOSE 8501
 CMD ["sh", "-c", "uv run streamlit run \"$STREAMLIT_APP_FILE\" --server.address=0.0.0.0 --server.port=${STREAMLIT_SERVER_PORT}"]

@@ -22,14 +22,14 @@ tasks:
       - task: _docker_build_streamlit_app
         vars:
           APP_ENTRYPOINT: apps/main.py
-          IMAGE: ghcr.io/ejmiddle/neckarwave-main
+          IMAGE: ghcr.io/ejmiddle/neckarwave-scripts-main
 
   main_docker_push:
     desc: Push the main Streamlit app image and build cache to GHCR
     cmds:
       - task: _docker_push_streamlit_app
         vars:
-          IMAGE: ghcr.io/ejmiddle/neckarwave-main
+          IMAGE: ghcr.io/ejmiddle/neckarwave-scripts-main
 
   main_docker_publish:
     desc: Build then push the main Streamlit app image
@@ -41,7 +41,7 @@ tasks:
     desc: Run the main app container locally on port 8080 with live source mounts
     cmds:
       - task: main_docker_build
-      - docker run --rm --platform linux/amd64 --env-file .env -e STREAMLIT_APP_FILE=apps/main.py -e STREAMLIT_SERVER_PORT=8080 -p 8080:8080 -v "$(pwd)/apps:/app/apps" -v "$(pwd)/data:/app/data" -v "$(pwd)/src:/app/src" -v "$(pwd)/pages:/app/pages" -v "$(pwd)/streamlit_app.py:/app/streamlit_app.py:ro" -v "$(pwd)/.streamlit:/app/.streamlit:ro" -v "$(pwd)/logging.conf:/app/logging.conf:ro" ghcr.io/ejmiddle/neckarwave-main:latest
+      - docker run --rm --platform linux/amd64 --env-file .env -e STREAMLIT_APP_FILE=apps/main.py -e STREAMLIT_SERVER_PORT=8080 -p 8080:8080 -v "$(pwd)/apps:/app/apps" -v "$(pwd)/data:/app/data" -v "$(pwd)/src:/app/src" -v "$(pwd)/pages:/app/pages" -v "$(pwd)/streamlit_app.py:/app/streamlit_app.py:ro" -v "$(pwd)/.streamlit:/app/.streamlit:ro" -v "$(pwd)/logging.conf:/app/logging.conf:ro" ghcr.io/ejmiddle/neckarwave-scripts-main:latest
     interactive: true
 
   # Accounting Streamlit app
@@ -60,14 +60,14 @@ tasks:
       - task: _docker_build_streamlit_app
         vars:
           APP_ENTRYPOINT: apps/accounting.py
-          IMAGE: ghcr.io/ejmiddle/neckarwave-accounting
+          IMAGE: ghcr.io/ejmiddle/neckarwave-scripts-accounting
 
   acc_docker_push:
     desc: Push the accounting Streamlit app image and build cache to GHCR
     cmds:
       - task: _docker_push_streamlit_app
         vars:
-          IMAGE: ghcr.io/ejmiddle/neckarwave-accounting
+          IMAGE: ghcr.io/ejmiddle/neckarwave-scripts-accounting
 
   acc_docker_publish:
     desc: Build then push the accounting Streamlit app image
@@ -79,7 +79,7 @@ tasks:
     desc: Run the accounting app container locally on port 8081 with live source mounts
     cmds:
       - task: acc_docker_build
-      - docker run --rm --platform linux/amd64 --env-file .env -e STREAMLIT_APP_FILE=apps/accounting.py -e STREAMLIT_SERVER_PORT=8080 -p 8081:8080 -v "$(pwd)/apps:/app/apps" -v "$(pwd)/data:/app/data" -v "$(pwd)/src:/app/src" -v "$(pwd)/pages:/app/pages" -v "$(pwd)/streamlit_app.py:/app/streamlit_app.py:ro" -v "$(pwd)/.streamlit:/app/.streamlit:ro" -v "$(pwd)/logging.conf:/app/logging.conf:ro" ghcr.io/ejmiddle/neckarwave-accounting:latest
+      - docker run --rm --platform linux/amd64 --env-file .env -e STREAMLIT_APP_FILE=apps/accounting.py -e STREAMLIT_SERVER_PORT=8080 -p 8081:8080 -v "$(pwd)/apps:/app/apps" -v "$(pwd)/data:/app/data" -v "$(pwd)/src:/app/src" -v "$(pwd)/pages:/app/pages" -v "$(pwd)/streamlit_app.py:/app/streamlit_app.py:ro" -v "$(pwd)/.streamlit:/app/.streamlit:ro" -v "$(pwd)/logging.conf:/app/logging.conf:ro" ghcr.io/ejmiddle/neckarwave-scripts-accounting:latest
     interactive: true
 
   # Dev and utility tasks
@@ -149,7 +149,7 @@ tasks:
       - docker run --rm -d --name nw_qdrant --network neckarwave_net -p 6333:6333 -p 6334:6334 -v "$(pwd)/qdrant_storage:/qdrant/storage" qdrant/qdrant:latest
       - task dev_docker_build_fastapi_amd64
       - docker rm -f nw_fastapi >/dev/null 2>&1 || true
-      - docker run --rm -d --name nw_fastapi --network neckarwave_net --env-file .env -e QDRANT_URL=http://nw_qdrant:6333 -p 8000:8000 ghcr.io/ejmiddle/fastapi-backend:latest
+      - docker run --rm -d --name nw_fastapi --network neckarwave_net --env-file .env -e QDRANT_URL=http://nw_qdrant:6333 -p 8000:8000 ghcr.io/ejmiddle/neckarwave-scripts-fastapi:latest
 
   dev_containers_down:
     desc: Stop backend container stack (qdrant + fastapi)
@@ -184,6 +184,24 @@ tasks:
     cmds:
       - UV_CACHE_DIR=.uv-cache uv run python scripts/ping_test_internet.py plot
 
+  dev_mittwald_suedseite_containers_status:
+    desc: Check Mittwald container/service status for project suedseite
+    deps: [dev_install]
+    cmds:
+      - sh -c 'if [ -f .env ]; then set -a; . ./.env; set +a; fi; UV_CACHE_DIR=.uv-cache uv run python scripts/check_mittwald_project_containers.py --project suedseite --fail-on-non-running'
+
+  dev_mittwald_suedseite_containers_logs:
+    desc: Check Mittwald container/service status for project suedseite and show recent logs for unhealthy services
+    deps: [dev_install]
+    cmds:
+      - sh -c 'if [ -f .env ]; then set -a; . ./.env; set +a; fi; UV_CACHE_DIR=.uv-cache uv run python scripts/check_mittwald_project_containers.py --project suedseite --fail-on-non-running --show-logs --log-tail 120'
+
+  dev_mittwald_suedseite_containers_unhealthy:
+    desc: Show only unhealthy Mittwald containers/services for project suedseite and their recent logs
+    deps: [dev_install]
+    cmds:
+      - sh -c 'if [ -f .env ]; then set -a; . ./.env; set +a; fi; UV_CACHE_DIR=.uv-cache uv run python scripts/check_mittwald_project_containers.py --project suedseite --only-unhealthy --fail-on-non-running --show-logs --log-tail 120'
+
   dev_clean:
     desc: Clear local uv, Streamlit, and Python caches
     cmds:
@@ -206,13 +224,13 @@ tasks:
   dev_docker_build_fastapi_amd64:
     desc: Build amd64 FastAPI backend image
     cmds:
-      - sh -c 'if [ "${DOCKER_BUILD_REGISTRY_CACHE:-0}" = "1" ]; then docker buildx build --platform linux/amd64 --cache-from type=registry,ref=ghcr.io/ejmiddle/fastapi-backend:buildcache --cache-to type=registry,ref=ghcr.io/ejmiddle/fastapi-backend:buildcache,mode=max -t ghcr.io/ejmiddle/fastapi-backend:latest --load -f Dockerfile.fastapi .; else docker buildx build --platform linux/amd64 -t ghcr.io/ejmiddle/fastapi-backend:latest --load -f Dockerfile.fastapi .; fi'
+      - sh -c 'if [ "${DOCKER_BUILD_REGISTRY_CACHE:-0}" = "1" ]; then docker buildx build --platform linux/amd64 --cache-from type=registry,ref=ghcr.io/ejmiddle/neckarwave-scripts-fastapi:buildcache --cache-to type=registry,ref=ghcr.io/ejmiddle/neckarwave-scripts-fastapi:buildcache,mode=max -t ghcr.io/ejmiddle/neckarwave-scripts-fastapi:latest --load -f Dockerfile.fastapi .; else docker buildx build --platform linux/amd64 -t ghcr.io/ejmiddle/neckarwave-scripts-fastapi:latest --load -f Dockerfile.fastapi .; fi'
 
   dev_docker_push_fastapi:
     desc: Push FastAPI backend image and build cache to GHCR
     cmds:
-      - docker push ghcr.io/ejmiddle/fastapi-backend:latest
-      - sh -c 'if [ "${DOCKER_BUILD_REGISTRY_CACHE:-0}" = "1" ]; then docker push ghcr.io/ejmiddle/fastapi-backend:buildcache; fi'
+      - docker push ghcr.io/ejmiddle/neckarwave-scripts-fastapi:latest
+      - sh -c 'if [ "${DOCKER_BUILD_REGISTRY_CACHE:-0}" = "1" ]; then docker push ghcr.io/ejmiddle/neckarwave-scripts-fastapi:buildcache; fi'
 
   dev_docker_publish_fastapi:
     desc: Build then push FastAPI backend image to GHCR
@@ -229,7 +247,7 @@ tasks:
     desc: Run the FastAPI backend container locally for testing
     deps: [dev_docker_build_fastapi_amd64]
     cmds:
-      - docker run --rm --platform linux/amd64 --env-file .env -p 8000:8000 ghcr.io/ejmiddle/fastapi-backend:latest
+      - docker run --rm --platform linux/amd64 --env-file .env -p 8000:8000 ghcr.io/ejmiddle/neckarwave-scripts-fastapi:latest
     interactive: true
 
   dev_qdrant_up:
