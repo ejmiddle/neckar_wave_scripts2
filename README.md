@@ -39,6 +39,12 @@ Behavior and overrides:
 
 Do not commit any files under `secrets/`. If you need to regenerate the OAuth token, delete `secrets/google-drive/token.json` and run the Drive auth flow again.
 
+## Deployment Secrets
+
+There is a minimal encrypted deploy-config setup for Mittwald deployments.
+
+Use [`deployment-secrets.md`](/Users/andreasschmidt/CodingProjects/neckarwave_scripts/deployment-secrets.md) for the workflow and copy-paste commands.
+
 ## Local Setup Notes
 
 - Keep project-specific secrets in `secrets/google-drive/`.

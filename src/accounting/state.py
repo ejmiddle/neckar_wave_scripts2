@@ -4,14 +4,14 @@ from typing import Any
 
 import streamlit as st
 
-ACCOUNTING_TYPES_EXPORT_PATH = Path("data/sevdesk/master_data/accounting_types.json")
-CHECK_ACCOUNTS_EXPORT_PATH = Path("data/sevdesk/master_data/checkaccounts.json")
-PRODUCTS_EXPORT_PATH = Path("data/sevdesk/master_data/products.json")
-TAX_RULES_EXPORT_PATH = Path("data/sevdesk/master_data/tax_rules.json")
-TAX_SETS_EXPORT_PATH = Path("data/sevdesk/master_data/tax_sets.json")
+ACCOUNTING_TYPES_EXPORT_PATH = Path("data/sevdesk/exports/master_data/accounting_types.json")
+CHECK_ACCOUNTS_EXPORT_PATH = Path("data/sevdesk/exports/master_data/checkaccounts.json")
+PRODUCTS_EXPORT_PATH = Path("data/sevdesk/exports/master_data/products.json")
+TAX_RULES_EXPORT_PATH = Path("data/sevdesk/exports/master_data/tax_rules.json")
+TAX_SETS_EXPORT_PATH = Path("data/sevdesk/exports/master_data/tax_sets.json")
 SEVDESK_CACHE_DIR = Path("data/sevdesk/cache")
-AMAZON_RECEIPTS_DIR = Path("data/sevdesk/Amazon_Belege")
-AMAZON_VOUCHER_OUTPUT_DIR = Path("data/sevdesk/amazon_voucher_payloads")
+AMAZON_RECEIPTS_DIR = Path("data/sevdesk/inputs/Amazon_Belege")
+AMAZON_VOUCHER_OUTPUT_DIR = Path("data/sevdesk/generated/amazon_voucher_payloads")
 
 SPARKASSE_NAME_FRAGMENT = "Sparkasse"
 AMAZON_PAYEE_NAME = (

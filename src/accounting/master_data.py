@@ -24,6 +24,7 @@ def format_accounting_type_row(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": str(row.get("id", "")),
         "name": str(row.get("name", "")).strip(),
+        "description": str(row.get("description") or row.get("text") or "").strip(),
         "type": row.get("type", ""),
         "skr03": row.get("skr03"),
         "skr04": row.get("skr04"),

@@ -1,0 +1,8 @@
+keys:
+  - &accounting_primary age18lthsxem76t9rhvgjssw0ewn04rnvut7vrman6znwatsucpyeakqyxd4ce
+
+creation_rules:
+  - path_regex: ^config/secrets/production\.enc\.env$
+    key_groups:
+      - age:
+          - *accounting_primary

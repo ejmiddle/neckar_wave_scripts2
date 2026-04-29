@@ -28,6 +28,10 @@ Archiv
 # Local runtime and secrets
 .env
 .env.*
+secrets.keys
+secrets.keys.pub
+config/secrets/*.env
+!config/secrets/*.env.example
 secrets/
 client_secret*.json
 credentials.json

@@ -8,11 +8,19 @@ from src.streamlit_apps.common import REPO_ROOT, load_environment
 
 
 PRIMARY_PAGE = {
-    "id": "shopify_qdrant",
+    "id": "shopify_qdrant_brot",
     "path": str(REPO_ROOT / "pages/Shopify_Qdrant.py"),
-    "title": "Shopify Bestellungen",
-    "description": "Shopify order analysis and Qdrant demo tools",
+    "title": "Shopify Bestellungen - Brot",
+    "description": "Shopify order analysis and Qdrant demo tools for Brot",
     "icon": "🛒",
+}
+
+COFFEE_PAGE = {
+    "id": "shopify_qdrant_coffee",
+    "path": str(REPO_ROOT / "pages/Shopify_Qdrant_Coffee.py"),
+    "title": "Shopify Bestellungen - Coffee",
+    "description": "Shopify order analysis and Qdrant demo tools for Coffee",
+    "icon": "☕",
 }
 
 FEATURE_PAGES = [
@@ -77,7 +85,7 @@ SYSTEM_INFO_PAGE = {
 }
 
 NAV_SECTIONS = [
-    ("Shopify Bestellungen", [PRIMARY_PAGE]),
+    ("Shopify Bestellungen", [PRIMARY_PAGE, COFFEE_PAGE]),
     ("Other Pages", [HOME_PAGE, *FEATURE_PAGES, SYSTEM_INFO_PAGE]),
 ]
 
@@ -90,7 +98,7 @@ def get_app_settings() -> dict:
             "path": page["path"],
             "icon": page["icon"],
         }
-        for page in [PRIMARY_PAGE, *FEATURE_PAGES]
+        for page in [PRIMARY_PAGE, COFFEE_PAGE, *FEATURE_PAGES]
     }
     return {
         "app_name": "Neckar Wave Operations",

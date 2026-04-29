@@ -7,9 +7,12 @@ from src.accounting.amazon_customers import (
     find_customer_by_name,
     find_customer_by_vat_id,
 )
-from src.accounting.amazon_extraction import format_amazon_payment_row
-from src.accounting.amazon_extraction import get_amazon_booking_rows
-from src.accounting.amazon_extraction import aggregate_amazon_booking_amount
+from src.accounting.amazon_extraction import (
+    aggregate_amazon_booking_amount,
+    format_amazon_payment_row,
+    get_amazon_booking_rows,
+    meaningful_receipt_extraction_results,
+)
 from src.accounting.common import (
     compare_booking_after_receipt_window,
     find_check_account_by_name,
@@ -24,9 +27,9 @@ from src.accounting.state import (
     AMAZON_BOOKING_MATCH_MAX_DELAY_DAYS,
     AMAZON_DEFAULT_CUSTOMER_NAME,
     AMAZON_VOUCHER_OUTPUT_DIR,
-    SEVDESK_TAX_SET_INNER_COMMUNITY_SUPPLY,
     SEVDESK_TAX_RULE_DEFAULT_TAXABLE_EXPENSE,
     SEVDESK_TAX_RULE_INNER_COMMUNITY_EXPENSE,
+    SEVDESK_TAX_SET_INNER_COMMUNITY_SUPPLY,
     SPARKASSE_NAME_FRAGMENT,
 )
 from src.sevdesk.voucher import (
@@ -294,8 +297,9 @@ def build_voucher_payload_entries(
         if row.get("id") is not None
     }
     entries: list[dict[str, Any]] = []
-    total_entries = len(extraction_results)
-    for entry_index, extraction_result in enumerate(extraction_results, start=1):
+    meaningful_results = meaningful_receipt_extraction_results(extraction_results)
+    total_entries = len(meaningful_results)
+    for entry_index, extraction_result in enumerate(meaningful_results, start=1):
         pdf_path = str(extraction_result.get("pdfPath", "")).strip()
         page_number = extraction_result.get("pageNumber")
         extracted = extraction_result.get("extracted")

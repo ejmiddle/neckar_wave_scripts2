@@ -10,6 +10,11 @@ from typing import BinaryIO
 
 from openpyxl import load_workbook
 
+from src.sevdesk.constants import (
+    MONTHLY_UMSATZ_TEMPLATE_PATH,
+    VOUCHER_REDEEMED_TEMPLATE_PATH,
+    VOUCHER_SOLD_TEMPLATE_PATH,
+)
 from src.sevdesk.voucher import normalize_create_payload
 
 DEFAULT_SHEETS = ("ALT", "WIE")
@@ -33,11 +38,7 @@ EXPECTED_SHEET_MARKERS = {
 TARGET_RATES = ("0", "7", "19")
 VOUCHER_RATES = ("7", "19")
 REVENUE_TAX_RULE = {"id": 1, "objectName": "TaxRule"}
-TEMPLATE_PATH = Path("data/sevdesk/templates/umsatz_voucher_template.json")
-VOUCHER_SOLD_TEMPLATE_PATH = Path("data/sevdesk/templates/voucher_verkauft_voucher_template.json")
-VOUCHER_REDEEMED_TEMPLATE_PATH = Path(
-    "data/sevdesk/templates/voucher_eingeloest_voucher_template.json"
-)
+TEMPLATE_PATH = MONTHLY_UMSATZ_TEMPLATE_PATH
 DEFAULT_REVENUE_ACCOUNTING_TYPE_NAME = "Einnahmen / Erlöse / Verkäufe"
 DEFAULT_VOUCHER_ACCOUNTING_TYPE_NAME = "Verrechnungskonto Gutscheine"
 MONTHLY_VOUCHER_TEMPLATE_MAP = {

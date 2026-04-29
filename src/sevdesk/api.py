@@ -221,16 +221,21 @@ def request_voucher_position_page(
     token: str,
     limit: int,
     offset: int,
+    *,
+    filters: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
+    params = {
+        "limit": max(1, limit),
+        "offset": max(0, offset),
+    }
+    if filters:
+        params.update(filters)
     payload = sevdesk_request(
         "GET",
         base_url,
         token,
         "/VoucherPos",
-        params={
-            "limit": max(1, limit),
-            "offset": max(0, offset),
-        },
+        params=params,
     )
     objects = payload.get("objects", [])
     if not isinstance(objects, list):
@@ -238,7 +243,12 @@ def request_voucher_position_page(
     return [item for item in objects if isinstance(item, dict)]
 
 
-def request_voucher_positions(base_url: str, token: str) -> list[dict[str, Any]]:
+def request_voucher_positions(
+    base_url: str,
+    token: str,
+    *,
+    filters: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     started_at = perf_counter()
     rows: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
@@ -251,7 +261,13 @@ def request_voucher_positions(base_url: str, token: str) -> list[dict[str, Any]]
     while True:
         page_number += 1
         page_started_at = perf_counter()
-        page = request_voucher_position_page(base_url, token, page_size, offset)
+        page = request_voucher_position_page(
+            base_url,
+            token,
+            page_size,
+            offset,
+            filters=filters,
+        )
         logger.info(
             "Fetched voucher position page %s (offset=%s, size=%s) in %.2fs.",
             page_number,
@@ -281,6 +297,43 @@ def request_voucher_positions(base_url: str, token: str) -> list[dict[str, Any]]
         perf_counter() - started_at,
     )
     return rows
+
+
+def attach_voucher_positions(
+    base_url: str,
+    token: str,
+    vouchers: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    enriched_vouchers: list[dict[str, Any]] = []
+    logger.info("Enriching %s vouchers with sevDesk voucher positions.", len(vouchers))
+
+    for index, voucher in enumerate(vouchers, start=1):
+        voucher_id = str(voucher.get("id", "")).strip()
+        if not voucher_id:
+            enriched_vouchers.append(voucher)
+            continue
+
+        position_started_at = perf_counter()
+        positions = request_voucher_positions(
+            base_url,
+            token,
+            filters={
+                "voucher[id]": voucher_id,
+                "voucher[objectName]": "Voucher",
+                "depth": "1",
+            },
+        )
+        enriched_vouchers.append({**voucher, "voucherPos": positions})
+        logger.info(
+            "Processed voucher positions %s/%s (id=%s): %s positions in %.2fs.",
+            index,
+            len(vouchers),
+            voucher_id,
+            len(positions),
+            perf_counter() - position_started_at,
+        )
+
+    return enriched_vouchers
 
 
 def _invoice_sort_key(row: dict[str, Any]) -> tuple[int, float, int]:
@@ -467,6 +520,7 @@ def request_voucher_by_id(base_url: str, token: str, voucher_id: str) -> dict[st
         base_url,
         token,
         f"/Voucher/{voucher_id}",
+        params={"depth": "1"},
     )
     objects = payload.get("objects")
     if isinstance(objects, dict):
@@ -474,6 +528,41 @@ def request_voucher_by_id(base_url: str, token: str, voucher_id: str) -> dict[st
     if isinstance(objects, list) and objects and isinstance(objects[0], dict):
         return objects[0]
     return None
+
+
+def attach_voucher_details(
+    base_url: str,
+    token: str,
+    vouchers: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    enriched_vouchers: list[dict[str, Any]] = []
+    logger.info("Enriching %s vouchers with sevDesk detail payloads.", len(vouchers))
+
+    for index, voucher in enumerate(vouchers, start=1):
+        voucher_id = str(voucher.get("id", "")).strip()
+        if not voucher_id:
+            enriched_vouchers.append(voucher)
+            continue
+
+        detail_started_at = perf_counter()
+        detail = request_voucher_by_id(base_url, token, voucher_id)
+        if not isinstance(detail, dict):
+            enriched_vouchers.append(voucher)
+            continue
+
+        merged_voucher = {**voucher, **detail}
+        if voucher.get("tags") is not None and detail.get("tags") is None:
+            merged_voucher["tags"] = voucher.get("tags")
+        enriched_vouchers.append(merged_voucher)
+        logger.info(
+            "Processed voucher detail %s/%s (id=%s) in %.2fs.",
+            index,
+            len(vouchers),
+            voucher_id,
+            perf_counter() - detail_started_at,
+        )
+
+    return enriched_vouchers
 
 
 def request_tag_by_id(base_url: str, token: str, tag_id: str) -> dict[str, Any] | None:
@@ -599,7 +688,9 @@ def request_vouchers_with_tags(
 ) -> list[dict[str, Any]]:
     started_at = perf_counter()
     vouchers = request_vouchers(base_url, token, limit, filters=filters, fetch_all=fetch_all)
-    enriched_vouchers = attach_voucher_tags(base_url, token, vouchers)
+    vouchers_with_details = attach_voucher_details(base_url, token, vouchers)
+    vouchers_with_positions = attach_voucher_positions(base_url, token, vouchers_with_details)
+    enriched_vouchers = attach_voucher_tags(base_url, token, vouchers_with_positions)
     logger.info(
         "Completed sevDesk voucher load with tags for 'Belege laden' in %.2fs.",
         perf_counter() - started_at,
@@ -658,7 +749,9 @@ def request_vouchers_with_tags_for_contacts(
 
     merged_rows.sort(key=_voucher_sort_key, reverse=True)
     limited_rows = merged_rows[: max(1, limit)]
-    enriched_vouchers = attach_voucher_tags(base_url, token, limited_rows)
+    detailed_rows = attach_voucher_details(base_url, token, limited_rows)
+    rows_with_positions = attach_voucher_positions(base_url, token, detailed_rows)
+    enriched_vouchers = attach_voucher_tags(base_url, token, rows_with_positions)
     logger.info(
         "Completed sevDesk voucher load with tags for %s contacts in %.2fs; returning %s rows.",
         len(normalized_contact_ids),

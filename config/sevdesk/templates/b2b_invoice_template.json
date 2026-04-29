@@ -1,0 +1,43 @@
+{
+  "invoice": {
+    "objectName": "Invoice",
+    "mapAll": true,
+    "invoiceType": "RE",
+    "status": 50,
+    "currency": "EUR",
+    "invoiceNumber": "{{ invoice_number }}",
+    "invoiceDate": "{{ date }}",
+    "deliveryDate": "{{ date }}",
+    "paymentDeadline": "{{ payment_deadline }}",
+    "addressName": "{{ customer_name }}",
+    "customerName": "{{ customer_name }}",
+    "addressStreet": "{{ customer_street }}",
+    "addressZip": "{{ customer_zip }}",
+    "addressCity": "{{ customer_city }}",
+    "addressCountry": {
+      "id": "1",
+      "objectName": "StaticCountry"
+    },
+    "header": "{{ header }}",
+    "headText": "{{ head_text }}",
+    "footText": "{{ foot_text }}",
+    "timeToPay": "{{ due_days }}",
+    "discountTime": "{{ discount_time }}",
+    "discount": "{{ discount }}",
+    "taxType": "default",
+    "sumNet": "{{ sum_net }}",
+    "sumTax": "{{ sum_tax }}",
+    "sumGross": "{{ sum_gross }}",
+    "contact": {
+      "id": "{{ contact_id }}",
+      "objectName": "Contact"
+    },
+    "address": "{{ customer_address }}",
+    "customerInternalNote": null,
+    "smallSettlement": "0",
+    "sendType": "VM"
+  },
+  "invoicePosSave": {{ positions }},
+  "invoicePosDelete": null,
+  "filename": null
+}

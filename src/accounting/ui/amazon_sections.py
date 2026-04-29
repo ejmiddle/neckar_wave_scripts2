@@ -20,6 +20,7 @@ from src.accounting.amazon_customers import (
 from src.accounting.amazon_extraction import (
     aggregate_amazon_booking_amount,
     aggregate_booking_receipt_match,
+    annotate_receipt_page_relevance,
     build_accounting_comparison_rows,
     build_aggregate_accounting_comparison_rows,
     build_amazon_selection_dataframe,
@@ -29,6 +30,7 @@ from src.accounting.amazon_extraction import (
     extract_accounting_data_from_pdf,
     format_status_option,
     get_amazon_booking_rows,
+    meaningful_receipt_extraction_results,
     sum_extracted_pdf_amounts,
 )
 from src.accounting.amazon_vouchers import build_voucher_payload_entries
@@ -243,6 +245,11 @@ def render_booking_selection_section(amazon_rows: list[dict[str, Any]]) -> list[
         if 0 <= int(index) < len(selection_groups)
     ]
 
+    st.caption(
+        "Put Amazon receipt PDFs in `data/sevdesk/inputs/Amazon_Belege/` or a subfolder below it. "
+        "They are matched by order number in the PDF filename."
+    )
+
     if st.button("Process bookings", width="stretch"):
         logger.info(
             "Triggered 'Process bookings' from Streamlit UI with %s selected booking(s): %s.",
@@ -365,6 +372,7 @@ def render_processing_results_section(selected_booking_rows: list[dict[str, Any]
             page_number=card.get("page_number"),
             extraction_entry=card["extraction_entry"],
             voucher_entry=card["voucher_entry"],
+            voucher_entry_index=card.get("voucher_entry_index"),
             voucher_entries=current_result["voucher_entries"],
             voucher_payload_state=voucher_payload_state,
             llm_result=llm_result,
@@ -391,8 +399,8 @@ def _build_processing_result_items(
             if isinstance(entry, dict) and str(entry.get("sourceKey", "")).strip()
         }
         voucher_entries_by_source = {
-            str(entry.get("sourceKey", "")).strip(): entry
-            for entry in voucher_entries
+            str(entry.get("sourceKey", "")).strip(): (voucher_index, entry)
+            for voucher_index, entry in enumerate(voucher_entries, start=1)
             if isinstance(entry, dict) and str(entry.get("sourceKey", "")).strip()
         }
 
@@ -415,13 +423,15 @@ def _build_processing_result_items(
             for entry_index, extraction_entry in enumerate(pdf_extractions, start=1):
                 pdf_path_value = str(extraction_entry.get("pdfPath", "")).strip()
                 source_key = str(extraction_entry.get("sourceKey", "")).strip()
+                voucher_match = voucher_entries_by_source.get(source_key)
                 cards.append(
                     {
                         "pdf_path": pdf_path_value,
                         "entry_index": entry_index,
                         "page_number": extraction_entry.get("pageNumber"),
                         "extraction_entry": extraction_entries_by_source.get(source_key),
-                        "voucher_entry": voucher_entries_by_source.get(source_key),
+                        "voucher_entry": voucher_match[1] if voucher_match else None,
+                        "voucher_entry_index": voucher_match[0] if voucher_match else None,
                     }
                 )
         else:
@@ -434,6 +444,7 @@ def _build_processing_result_items(
                         "page_number": None,
                         "extraction_entry": None,
                         "voucher_entry": None,
+                        "voucher_entry_index": None,
                     }
                 )
         result_items.append(
@@ -613,6 +624,7 @@ def _render_compact_processing_card(
     page_number: int | None,
     extraction_entry: dict[str, Any] | None,
     voucher_entry: dict[str, Any] | None,
+    voucher_entry_index: int | None,
     voucher_entries: list[dict[str, Any]],
     voucher_payload_state: dict[str, Any] | None,
     llm_result: dict[str, Any] | None,
@@ -660,6 +672,9 @@ def _render_compact_processing_card(
             render_pdf_inline(pdf_path, height=480)
         with result_col:
             if isinstance(extraction_entry, dict):
+                skip_reason = str(extraction_entry.get("skipReason", "")).strip()
+                if skip_reason:
+                    st.warning(f"Skipped page for voucher creation: {skip_reason}.")
                 st.dataframe(
                     pd.DataFrame(build_extracted_accounting_rows(extraction_entry.get("extracted", {}))),
                     width="stretch",
@@ -676,7 +691,7 @@ def _render_compact_processing_card(
                     voucher_entries=voucher_entries,
                     voucher_payload_state=voucher_payload_state,
                     llm_result=llm_result,
-                    entry_index=entry_index,
+                    entry_index=voucher_entry_index or entry_index,
                 )
 
 
@@ -916,7 +931,9 @@ def _handle_identify_pdfs(selected_booking_rows: list[dict[str, Any]]) -> None:
                         )
                         extraction_results.extend(page_extraction_results)
 
-                    compare_amount_to_booking = len(extraction_results) == 1
+                    extraction_results = annotate_receipt_page_relevance(extraction_results)
+                    meaningful_results = meaningful_receipt_extraction_results(extraction_results)
+                    compare_amount_to_booking = len(meaningful_results) == 1
                     for extraction_result in extraction_results:
                         extraction_result["bookingId"] = booking_id
                         extraction_result["comparison"] = build_accounting_comparison_rows(

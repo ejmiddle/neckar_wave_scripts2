@@ -285,6 +285,15 @@ def _clean_voucher_pos_for_update(
     return cleaned
 
 
+def _clean_existing_voucher_pos_for_update(position: dict[str, Any]) -> dict[str, Any]:
+    cleaned = deepcopy(position)
+    for key in ("create", "update", "sevClient", "voucher"):
+        cleaned.pop(key, None)
+    cleaned.setdefault("objectName", "VoucherPos")
+    cleaned.setdefault("mapAll", True)
+    return cleaned
+
+
 def build_voucher_accounting_type_update_payload(
     existing_voucher: dict[str, Any],
     accounting_type: dict[str, Any] | None,
@@ -307,6 +316,61 @@ def build_voucher_accounting_type_update_payload(
     ]
     if not cleaned_positions:
         raise RuntimeError("Voucher does not contain any usable positions that can be updated.")
+
+    voucher_payload = _clean_voucher_for_update(voucher)
+    voucher_id = str(voucher_payload.get("id", "")).strip()
+    if not voucher_id:
+        raise RuntimeError("Existing voucher payload is missing an id.")
+    voucher_payload["id"] = voucher_id
+
+    return {
+        "voucher": voucher_payload,
+        "voucherPosSave": cleaned_positions,
+        "voucherPosDelete": None,
+        "filename": None,
+    }
+
+
+def build_voucher_accounting_type_update_payload_for_positions(
+    existing_voucher: dict[str, Any],
+    accounting_type: dict[str, Any] | None,
+    voucher_position_ids: list[str],
+) -> dict[str, Any]:
+    if not isinstance(existing_voucher, dict):
+        raise RuntimeError("Existing voucher payload must be an object.")
+
+    accounting_type_ref = accounting_type_ref_from_buchunggskonto(accounting_type)
+    accounting_type_id = str(accounting_type_ref.get("id", "")).strip()
+    if not accounting_type_id:
+        raise RuntimeError("Selected accounting type has no id.")
+
+    target_position_ids = {
+        str(position_id).strip() for position_id in voucher_position_ids if str(position_id).strip()
+    }
+    if not target_position_ids:
+        raise RuntimeError("No voucher positions were selected for update.")
+
+    voucher, positions = _extract_voucher_update_source(existing_voucher)
+    if not positions:
+        raise RuntimeError("Voucher does not contain any positions that can be updated.")
+
+    cleaned_positions: list[dict[str, Any]] = []
+    matched_position_ids: set[str] = set()
+    for position in positions:
+        position_id = str(position.get("id", "")).strip()
+        if position_id in target_position_ids:
+            cleaned_position = _clean_voucher_pos_for_update(position, accounting_type_ref)
+            matched_position_ids.add(position_id)
+        else:
+            cleaned_position = _clean_existing_voucher_pos_for_update(position)
+        cleaned_positions.append(cleaned_position)
+
+    missing_position_ids = sorted(target_position_ids - matched_position_ids)
+    if missing_position_ids:
+        raise RuntimeError(
+            "Selected voucher positions were not found on the voucher: "
+            + ", ".join(missing_position_ids)
+        )
 
     voucher_payload = _clean_voucher_for_update(voucher)
     voucher_id = str(voucher_payload.get("id", "")).strip()

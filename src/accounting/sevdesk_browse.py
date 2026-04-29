@@ -83,16 +83,70 @@ def _contact_display_name(value: Any) -> str:
 
 
 def _voucher_contact_name(row: dict[str, Any]) -> str:
-    supplier_name = str(row.get("supplierName", "")).strip()
-    if supplier_name:
-        return supplier_name
-
     for key in ("supplier", "contact"):
         contact_name = _contact_display_name(row.get(key))
         if contact_name:
             return contact_name
 
+    supplier_name_value = row.get("supplierName")
+    supplier_name = str(supplier_name_value).strip() if supplier_name_value is not None else ""
+    if supplier_name:
+        return supplier_name
+
+    supplier_name_at_save_value = row.get("supplierNameAtSave")
+    supplier_name_at_save = (
+        str(supplier_name_at_save_value).strip() if supplier_name_at_save_value is not None else ""
+    )
+    if supplier_name_at_save:
+        return supplier_name_at_save
+
     return ""
+
+
+def _voucher_positions(row: dict[str, Any]) -> list[dict[str, Any]]:
+    positions_value = row.get("voucherPos") or row.get("voucherPosSave")
+    if isinstance(positions_value, list):
+        return [position for position in positions_value if isinstance(position, dict)]
+
+    nested_voucher = row.get("voucher")
+    if isinstance(nested_voucher, dict):
+        nested_positions = nested_voucher.get("voucherPos") or nested_voucher.get("voucherPosSave")
+        if isinstance(nested_positions, list):
+            return [position for position in nested_positions if isinstance(position, dict)]
+
+    return []
+
+
+def _accounting_ref_label(value: Any) -> str:
+    if not isinstance(value, dict):
+        return ""
+
+    name = str(value.get("name", "")).strip()
+    account_number = str(
+        value.get("accountNumber") or value.get("number") or value.get("skr03") or value.get("skr04") or ""
+    ).strip()
+    item_id = str(value.get("id", "")).strip()
+
+    if name and account_number:
+        return f"{name} ({account_number})"
+    if name:
+        return name
+    if account_number:
+        return account_number
+    return item_id
+
+
+def _voucher_accounting_type_name(row: dict[str, Any]) -> str:
+    accounting_labels = _dedupe_texts(
+        [
+            _accounting_ref_label(position.get("accountingType"))
+            or _accounting_ref_label(position.get("accountDatev"))
+            for position in _voucher_positions(row)
+        ]
+    )
+    if not accounting_labels:
+        return "-"
+    return ", ".join(accounting_labels)
 
 
 def _invoice_contact_name(row: dict[str, Any]) -> str:
@@ -185,6 +239,56 @@ def format_latest_voucher_row(row: dict[str, Any]) -> dict[str, Any]:
         "lieferant": _voucher_contact_name(row) or "-",
         "status": row.get("status", "-"),
         "tags": ", ".join(extract_voucher_tag_names(row)) or "-",
+    }
+
+
+def format_voucher_position_row(
+    row: dict[str, Any],
+    *,
+    accounting_type_lookup: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    voucher = row.get("voucher")
+    voucher_id = ""
+    voucher_number = "-"
+    voucher_description = "-"
+    if isinstance(voucher, dict):
+        voucher_id = str(voucher.get("id", "")).strip()
+        voucher_number = (
+            str(voucher.get("voucherNumber") or voucher.get("number") or voucher.get("id") or "-").strip() or "-"
+        )
+        voucher_description = str(voucher.get("description", "")).strip() or "-"
+
+    amount_value = row.get("sumGross")
+    if amount_value is None:
+        amount_value = row.get("sumNet")
+
+    accounting_type = row.get("accountingType")
+    accounting_type_id = ""
+    if isinstance(accounting_type, dict):
+        accounting_type_id = str(accounting_type.get("id", "")).strip()
+    accounting_type_master = (
+        accounting_type_lookup.get(accounting_type_id, {})
+        if accounting_type_lookup and accounting_type_id
+        else {}
+    )
+    accounting_type_description = (
+        str(accounting_type_master.get("description") or accounting_type_master.get("name") or "").strip()
+        or _accounting_ref_label(accounting_type)
+        or _accounting_ref_label(row.get("accountDatev"))
+        or "-"
+    )
+
+    return {
+        "positions_id": str(row.get("id", "")).strip(),
+        "beleg_id": voucher_id or "-",
+        "belegnummer": voucher_number,
+        "beschreibung": voucher_description,
+        "positionstext": str(row.get("text", "")).strip() or "-",
+        "betrag": parse_amount_value(amount_value),
+        "buchungskonto": _accounting_ref_label(row.get("accountingType"))
+        or _accounting_ref_label(row.get("accountDatev"))
+        or "-",
+        "buchungskonto_beschreibung": accounting_type_description,
     }
 
 

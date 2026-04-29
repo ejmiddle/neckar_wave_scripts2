@@ -7,7 +7,11 @@ import streamlit as st
 
 from src.accounting.common import base_url, ensure_token, report_error, safe_filename_token
 from src.accounting.master_data import load_stored_accounting_types, load_stored_check_accounts
-from src.accounting.sevdesk_browse import extract_voucher_tag_names
+from src.accounting.sevdesk_browse import (
+    extract_voucher_tag_names,
+    format_latest_voucher_row,
+    format_voucher_position_row,
+)
 from src.accounting.ui.displays import show_selectable_vouchers, show_transactions
 from src.accounting.ui.filter_utils import (
     build_status_filter_options,
@@ -24,7 +28,10 @@ from src.sevdesk.api import (
     request_vouchers_with_tags,
     request_vouchers_with_tags_for_contacts,
 )
-from src.sevdesk.booking import book_voucher_to_check_account, update_voucher_accounting_type
+from src.sevdesk.booking import (
+    book_voucher_to_check_account,
+    update_voucher_accounting_type_for_positions,
+)
 
 LATEST_BELEGE_ROWS_KEY = "sevdesk_latest_belege_rows"
 LATEST_BELEGE_LIMIT_KEY = "sevdesk_latest_belege_limit"
@@ -38,6 +45,9 @@ LATEST_BELEGE_UMBUCHEN_CHECK_ACCOUNT_KEY = "sevdesk_latest_belege_umbuchen_check
 LATEST_BELEGE_UMBUCHEN_RESULTS_KEY = "sevdesk_latest_belege_umbuchen_results"
 LATEST_BELEGE_UMBUCHEN_ACCOUNTING_TYPE_KEY = "sevdesk_latest_belege_umbuch_accounting_type"
 LATEST_BELEGE_UMBUCHEN_ACCOUNTING_RESULTS_KEY = "sevdesk_latest_belege_umbuch_accounting_results"
+LATEST_BELEGE_POSITION_SELECTION_TABLE_KEY = "sevdesk_latest_belege_position_selection_table"
+LATEST_BELEGE_SELECTED_POSITION_IDS_KEY = "sevdesk_latest_belege_selected_position_ids"
+LATEST_BELEGE_POSITION_SOURCE_IDS_KEY = "sevdesk_latest_belege_position_source_ids"
 NO_TAGS_FILTER_LABEL = "(No tags)"
 LATEST_BELEGE_DOWNLOAD_PAYLOAD_KEY = "sevdesk_latest_belege_download_payload"
 LATEST_BELEGE_START_DATE_KEY = "sevdesk_latest_belege_start_date"
@@ -159,6 +169,7 @@ def _row_matches_tag_filter(row: dict, selected_tags: set[str]) -> bool:
 
 
 def _voucher_text_matches(row: dict, query: str) -> bool:
+    formatted_row = format_latest_voucher_row(row)
     return matches_text_query(
         query,
         [
@@ -171,6 +182,7 @@ def _voucher_text_matches(row: dict, query: str) -> bool:
             row.get("invoiceDate"),
             row.get("voucherDate"),
             row.get("status"),
+            formatted_row.get("lieferant"),
             *extract_voucher_tag_names(row),
         ],
     )
@@ -279,6 +291,101 @@ def _merge_updated_vouchers_into_session(updated_vouchers: list[dict]) -> None:
         merged_rows.append(merged_row)
 
     st.session_state[LATEST_BELEGE_ROWS_KEY] = merged_rows
+
+
+def _selected_voucher_positions(rows: list[dict]) -> list[dict]:
+    collected_positions: list[dict] = []
+    for row in rows:
+        voucher_id = str(row.get("id", "")).strip()
+        voucher_reference = {
+            "id": voucher_id,
+            "voucherNumber": row.get("voucherNumber"),
+            "number": row.get("number"),
+            "description": row.get("description"),
+        }
+        positions = row.get("voucherPos") or row.get("voucherPosSave")
+        if not isinstance(positions, list):
+            continue
+        for position in positions:
+            if not isinstance(position, dict):
+                continue
+            position_id = str(position.get("id", "")).strip()
+            if not position_id:
+                continue
+            position_voucher = position.get("voucher")
+            collected_positions.append(
+                {
+                    **position,
+                    "voucher": position_voucher if isinstance(position_voucher, dict) else voucher_reference,
+                }
+            )
+    return collected_positions
+
+
+def _render_selectable_voucher_positions(
+    rows: list[dict],
+    *,
+    selection_key: str,
+    selected_position_ids: set[str] | None = None,
+    accounting_type_lookup: dict[str, dict] | None = None,
+) -> list[str]:
+    if not rows:
+        st.info("Keine Buchungspositionen für die ausgewählten Belege gefunden.")
+        return []
+
+    visible_position_ids = [
+        str(row.get("id", "")).strip() for row in rows if str(row.get("id", "")).strip()
+    ]
+    selected_id_set = {
+        str(value).strip() for value in (selected_position_ids or set()) if str(value).strip()
+    }
+    widget_version_key = f"{selection_key}_widget_version"
+    widget_version = int(st.session_state.get(widget_version_key, 0))
+
+    action_col1, action_col2 = st.columns(2)
+    with action_col1:
+        select_all_clicked = st.button(
+            "Alle sichtbaren Positionen auswählen",
+            width="stretch",
+            key=f"{selection_key}_select_all",
+        )
+    with action_col2:
+        deselect_all_clicked = st.button(
+            "Alle sichtbaren Positionen abwählen",
+            width="stretch",
+            key=f"{selection_key}_deselect_all",
+        )
+
+    if select_all_clicked or deselect_all_clicked:
+        widget_version += 1
+        st.session_state[widget_version_key] = widget_version
+        selected_id_set = set(visible_position_ids) if select_all_clicked else set()
+
+    position_df = pd.DataFrame(
+        [
+            {
+                "selected": str(row.get("id", "")).strip() in selected_id_set,
+                **format_voucher_position_row(row, accounting_type_lookup=accounting_type_lookup),
+            }
+            for row in rows
+        ]
+    )
+    edited_position_df = st.data_editor(
+        position_df,
+        width="stretch",
+        hide_index=True,
+        disabled=[column for column in position_df.columns if column != "selected"],
+        column_config={
+            "selected": st.column_config.CheckboxColumn("Select"),
+            "buchungskonto": st.column_config.TextColumn("Buchungskonto"),
+            "buchungskonto_beschreibung": st.column_config.TextColumn("Beschreibung"),
+            "positionstext": st.column_config.TextColumn("Positionstext"),
+        },
+        key=f"{selection_key}_{widget_version}",
+    )
+
+    selected_rows = edited_position_df.loc[edited_position_df["selected"], "positions_id"].tolist()
+    return [str(value).strip() for value in selected_rows if str(value).strip()]
 
 
 def _render_latest_belege_umbuchen_results() -> None:
@@ -553,9 +660,58 @@ def _render_latest_belege_umbuchen_section(
     st.divider()
     st.markdown("**Umbuchen auf Buchungskonto**")
 
+    current_position_source_ids = st.session_state.get(LATEST_BELEGE_POSITION_SOURCE_IDS_KEY, [])
+    if current_position_source_ids != current_selection_ids:
+        st.session_state[LATEST_BELEGE_SELECTED_POSITION_IDS_KEY] = []
+
+    if st.button(
+        "Buchungspositionen anzeigen",
+        width="stretch",
+        disabled=not selected_rows,
+    ):
+        st.session_state[LATEST_BELEGE_POSITION_SOURCE_IDS_KEY] = current_selection_ids
+        st.session_state[LATEST_BELEGE_SELECTED_POSITION_IDS_KEY] = []
+
+    show_positions = (
+        bool(current_selection_ids)
+        and st.session_state.get(LATEST_BELEGE_POSITION_SOURCE_IDS_KEY) == current_selection_ids
+    )
+    selected_positions: list[dict] = []
+    if show_positions:
+        selected_voucher_positions = _selected_voucher_positions(selected_rows)
+        selected_position_ids = {
+            str(value).strip()
+            for value in st.session_state.get(LATEST_BELEGE_SELECTED_POSITION_IDS_KEY, [])
+            if str(value).strip()
+        }
+        chosen_position_ids = _render_selectable_voucher_positions(
+            selected_voucher_positions,
+            selection_key=LATEST_BELEGE_POSITION_SELECTION_TABLE_KEY,
+            selected_position_ids=selected_position_ids,
+            accounting_type_lookup=accounting_type_lookup,
+        )
+        chosen_position_id_set = {
+            str(value).strip() for value in chosen_position_ids if str(value).strip()
+        }
+        st.session_state[LATEST_BELEGE_SELECTED_POSITION_IDS_KEY] = sorted(chosen_position_id_set)
+        selected_positions = [
+            row
+            for row in selected_voucher_positions
+            if str(row.get("id", "")).strip() in chosen_position_id_set
+        ]
+        if selected_positions:
+            st.caption(f"Selected Buchungspositionen: {len(selected_positions)}")
+        else:
+            st.caption("Select one or more Buchungspositionen in the table above.")
+
     accounting_types_for_selection = st.session_state.get("sevdesk_accounting_types_rows")
     if accounting_types_for_selection is None:
         accounting_types_for_selection = load_stored_accounting_types()
+    accounting_type_lookup = {
+        str(row.get("id", "")).strip(): row
+        for row in (accounting_types_for_selection or [])
+        if str(row.get("id", "")).strip()
+    }
     active_accounting_types = _active_accounting_type_rows(accounting_types_for_selection or [])
     if not active_accounting_types:
         st.info(
@@ -581,76 +737,102 @@ def _render_latest_belege_umbuchen_section(
             selected_accounting_type = accounting_type_options[selected_accounting_type_label]
 
             if st.button(
-                "Buchungskonto ausgewählter Belege ändern",
+                "Buchungskonto ausgewählter Buchungspositionen ändern",
                 width="stretch",
-                disabled=not selected_rows,
+                disabled=not selected_positions,
                 type="primary",
             ):
                 token = ensure_token()
                 if token:
                     results: list[dict[str, str]] = []
-                    processed_voucher_ids: set[str] = set()
+                    processed_position_ids: set[str] = set()
                     updated_vouchers: list[dict] = []
+                    positions_by_voucher_id: dict[str, list[dict]] = {}
+                    for position in selected_positions:
+                        voucher = position.get("voucher")
+                        if not isinstance(voucher, dict):
+                            continue
+                        voucher_id = str(voucher.get("id", "")).strip()
+                        position_id = str(position.get("id", "")).strip()
+                        if not voucher_id or not position_id:
+                            continue
+                        positions_by_voucher_id.setdefault(voucher_id, []).append(position)
+
                     with st.spinner("Buchungskonto in sevDesk wird aktualisiert..."):
-                        for row in selected_rows:
-                            voucher_id = str(row.get("id", "")).strip()
-                            description = str(row.get("description", "")).strip() or "-"
+                        for voucher_id, voucher_positions in positions_by_voucher_id.items():
                             try:
-                                update_result = update_voucher_accounting_type(
+                                update_result = update_voucher_accounting_type_for_positions(
                                     base_url(),
                                     token,
                                     voucher_id,
                                     selected_accounting_type,
+                                    [str(position.get("id", "")).strip() for position in voucher_positions],
                                 )
                                 change_status = str(update_result.get("change_status", "success")).strip()
                                 if change_status in {"success", "skipped"}:
-                                    processed_voucher_ids.add(voucher_id)
+                                    processed_position_ids.update(
+                                        update_result.get("updated_position_ids", []) or []
+                                    )
                                 updated_voucher = update_result.get("updated_voucher")
                                 if isinstance(updated_voucher, dict):
                                     updated_vouchers.append(updated_voucher)
 
-                                before_ids = ", ".join(
-                                    update_result.get("before_accounting_type_ids", []) or []
-                                ) or "-"
-                                after_ids = ", ".join(
-                                    update_result.get("after_accounting_type_ids", []) or []
-                                ) or "-"
-                                results.append(
-                                    {
-                                        "result": change_status,
-                                        "id": voucher_id,
-                                        "beschreibung": description,
-                                        "fromAccountingType": before_ids,
-                                        "toAccountingType": after_ids,
-                                        "targetAccountingType": selected_accounting_type_label,
-                                        "message": (
-                                            "Already on target accounting type."
-                                            if change_status == "skipped"
-                                            else "Updated successfully."
-                                        ),
-                                    }
-                                )
+                                before_map = update_result.get("before_position_accounting_type_ids", {}) or {}
+                                after_map = update_result.get("after_position_accounting_type_ids", {}) or {}
+                                for position in voucher_positions:
+                                    position_id = str(position.get("id", "")).strip()
+                                    formatted_position = format_voucher_position_row(
+                                        position,
+                                        accounting_type_lookup=accounting_type_lookup,
+                                    )
+                                    results.append(
+                                        {
+                                            "result": change_status,
+                                            "belegId": voucher_id,
+                                            "positionId": position_id,
+                                            "belegnummer": str(formatted_position.get("belegnummer", "-")),
+                                            "beschreibung": str(formatted_position.get("beschreibung", "-")),
+                                            "positionstext": str(formatted_position.get("positionstext", "-")),
+                                            "fromAccountingType": str(before_map.get(position_id, "-")),
+                                            "toAccountingType": str(after_map.get(position_id, "-")),
+                                            "targetAccountingType": selected_accounting_type_label,
+                                            "message": (
+                                                "Already on target accounting type."
+                                                if change_status == "skipped"
+                                                else "Updated successfully."
+                                            ),
+                                        }
+                                    )
                             except Exception as exc:
-                                results.append(
-                                    {
-                                        "result": "error",
-                                        "id": voucher_id,
-                                        "beschreibung": description,
-                                        "fromAccountingType": "-",
-                                        "toAccountingType": "-",
-                                        "targetAccountingType": selected_accounting_type_label,
-                                        "message": str(exc),
-                                    }
-                                )
+                                for position in voucher_positions:
+                                    position_id = str(position.get("id", "")).strip()
+                                    formatted_position = format_voucher_position_row(
+                                        position,
+                                        accounting_type_lookup=accounting_type_lookup,
+                                    )
+                                    results.append(
+                                        {
+                                            "result": "error",
+                                            "belegId": voucher_id,
+                                            "positionId": position_id,
+                                            "belegnummer": str(formatted_position.get("belegnummer", "-")),
+                                            "beschreibung": str(formatted_position.get("beschreibung", "-")),
+                                            "positionstext": str(formatted_position.get("positionstext", "-")),
+                                            "fromAccountingType": "-",
+                                            "toAccountingType": "-",
+                                            "targetAccountingType": selected_accounting_type_label,
+                                            "message": str(exc),
+                                        }
+                                    )
 
                     st.session_state[LATEST_BELEGE_UMBUCHEN_ACCOUNTING_RESULTS_KEY] = results
-                    if processed_voucher_ids:
-                        remaining_selected_ids = [
-                            voucher_id
-                            for voucher_id in st.session_state.get(LATEST_BELEGE_SELECTED_IDS_KEY, [])
-                            if voucher_id not in processed_voucher_ids
+                    if processed_position_ids:
+                        remaining_position_ids = [
+                            position_id
+                            for position_id in st.session_state.get(LATEST_BELEGE_SELECTED_POSITION_IDS_KEY, [])
+                            if position_id not in processed_position_ids
                         ]
-                        st.session_state[LATEST_BELEGE_SELECTED_IDS_KEY] = remaining_selected_ids
+                        st.session_state[LATEST_BELEGE_SELECTED_POSITION_IDS_KEY] = remaining_position_ids
                         _merge_updated_vouchers_into_session(updated_vouchers)
 
     _render_latest_belege_umbuchen_results()
@@ -758,6 +940,9 @@ def render_latest_belege_section() -> None:
                 st.session_state.pop(LATEST_BELEGE_UMBUCHEN_RESULTS_KEY, None)
                 st.session_state.pop(LATEST_BELEGE_UMBUCHEN_ACCOUNTING_RESULTS_KEY, None)
                 st.session_state.pop(LATEST_BELEGE_DOWNLOAD_PAYLOAD_KEY, None)
+                st.session_state.pop(LATEST_BELEGE_POSITION_SELECTION_TABLE_KEY, None)
+                st.session_state[LATEST_BELEGE_SELECTED_POSITION_IDS_KEY] = []
+                st.session_state[LATEST_BELEGE_POSITION_SOURCE_IDS_KEY] = []
             except Exception as exc:
                 report_error(
                     f"Failed to load Belege: {exc}",

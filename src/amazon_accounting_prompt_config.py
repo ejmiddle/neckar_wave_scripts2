@@ -12,6 +12,8 @@ DEFAULT_SYSTEM_PROMPT = (
     "Nutze ausschliesslich Informationen, die auf dem Dokument klar erkennbar sind. "
     "Wenn ein Feld nicht sicher belegt ist, gib null zurueck. "
     "Wenn ein PDF mehrere Seiten hat, behandle standardmaessig jede Seite als eigenen einzelnen Beleg. "
+    "Wenn eine Seite nur Fortsetzungs-/Kopf-/Fusstext ohne eigenen Gesamtbetrag enthaelt, gib fuer "
+    "amount und invoice_date null zurueck und beschreibe dies kurz in notes. "
     "amount ist der Bruttogesamtbetrag in EUR. "
     "vat_rate_percent darf nur 19, 7 oder 0 sein. "
     "purchase_category darf nur 'Sonstiges Material' oder 'Bürobedarf' sein. "

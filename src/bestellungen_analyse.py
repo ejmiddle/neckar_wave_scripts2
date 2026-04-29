@@ -19,6 +19,19 @@ def move_column_to_end(df: "pd.DataFrame", column: str) -> "pd.DataFrame":
     return df[ordered_cols]
 
 
+def apply_fulfillment_filter(
+    df: "pd.DataFrame", filter_unfulfilled_only: bool
+) -> "pd.DataFrame":
+    if "Fulfillment Status" not in df.columns:
+        return df
+
+    if not filter_unfulfilled_only:
+        return df
+
+    fulfillment_status = df["Fulfillment Status"].fillna("").astype(str).str.lower()
+    return df[fulfillment_status != "fulfilled"]
+
+
 def style_shopify_day_matches(
     df: "pd.DataFrame",
     styler: Optional["pd.io.formats.style.Styler"] = None,
@@ -121,12 +134,20 @@ def style_notion_date_today(
     return styler.apply(highlight_match, axis=1)
 
 
-def bestellungen_analyse() -> None:
+def bestellungen_analyse(
+    title_filter_mode: str = "include",
+    default_titles: list[str] | None = None,
+    state_prefix: str = "shopify_brot",
+    show_orders_by_customer: bool = True,
+    default_days_back: int = 7,
+    show_unfulfilled_filter: bool = False,
+    show_notion_button: bool = True,
+) -> None:
     st.set_page_config(layout="wide")
 
     with st.sidebar:
 
-        default_start_date = datetime.now(UTC).date() - timedelta(days=7)
+        default_start_date = datetime.now(UTC).date() - timedelta(days=default_days_back)
         selected_start_date = st.date_input(
             "Bestellungen ab Datum:",
             value=default_start_date,
@@ -139,6 +160,13 @@ def bestellungen_analyse() -> None:
             value=default_end_date,
             help="Wählen Sie das Enddatum für die Bestellungsabfrage. Standard: Heute.",
         )
+
+        filter_unfulfilled_only = False
+        if show_unfulfilled_filter:
+            filter_unfulfilled_only = st.checkbox(
+                "Unfulfilled filtern",
+                key=f"{state_prefix}_fulfillment_filter",
+            )
 
         start_datetime = datetime.combine(selected_start_date, datetime.min.time()).replace(
             tzinfo=UTC
@@ -160,12 +188,14 @@ def bestellungen_analyse() -> None:
                 st.session_state.end_date = selected_end_date
                 df.to_excel("shopify_orders.xlsx", index=False)
 
-        if st.button("Notion Bestellungen ab heute laden"):
+        if show_notion_button and st.button("Notion Bestellungen ab heute laden"):
             df = get_notion_orders_from_today()
             st.session_state.notion_bestellungen = df
 
         if "bestellungen" in st.session_state:
-            df = st.session_state.bestellungen
+            df = apply_fulfillment_filter(
+                st.session_state.bestellungen.copy(), filter_unfulfilled_only
+            )
             total_orders = len(df)
             total_items = df["Quantity"].sum()
 
@@ -184,10 +214,13 @@ def bestellungen_analyse() -> None:
 
     st.title("Bestellungen")
 
-
-
     if "bestellungen" in st.session_state:
-        df = move_column_to_end(st.session_state.bestellungen, "Product Title")
+        df = move_column_to_end(
+            apply_fulfillment_filter(
+                st.session_state.bestellungen.copy(), filter_unfulfilled_only
+            ),
+            "Product Title",
+        )
         with st.expander("Alle Bestellungen sehen"):
             st.dataframe(style_shopify_day_matches(df), hide_index=True)
             create_excel_download_button(
@@ -196,35 +229,63 @@ def bestellungen_analyse() -> None:
                 "📥 Alle Bestellungen herunterladen",
             )
 
-        all_product_titles = sorted(df["Product Title"].unique().tolist())
+        all_product_titles = sorted(df["Product Title"].dropna().unique().tolist())
+        titles_state_key = f"{state_prefix}_titles"
 
-        if "allowed_titles" not in st.session_state:
+        if default_titles is None:
             default_titles = [
                 "Gutes Brot nach Ziegelhausen/Schlierbach",
                 "Unsere Brote",
                 "Brote für Solawi",
             ]
-            st.session_state.allowed_titles = [
+
+        if titles_state_key not in st.session_state:
+            st.session_state[titles_state_key] = [
                 title for title in default_titles if title in all_product_titles
             ]
 
-        with st.expander("Produkttitel auswählen"):
-            st.write("Wählen Sie die Produkttitel aus, die angezeigt werden sollen:")
+        if title_filter_mode == "exclude":
+            with st.expander("Ausgeschlossene Produkttitel"):
+                st.write(
+                    "Diese Produkttitel werden aus der Coffee-Ansicht ausgeschlossen."
+                )
 
-            for title in all_product_titles:
-                is_selected = title in st.session_state.allowed_titles
-                if st.checkbox(
-                    title,
-                    value=is_selected,
-                    key=f"checkbox_{title}",
-                ):
-                    if title not in st.session_state.allowed_titles:
-                        st.session_state.allowed_titles.append(title)
-                else:
-                    if title in st.session_state.allowed_titles:
-                        st.session_state.allowed_titles.remove(title)
+                for title in all_product_titles:
+                    is_excluded = title in st.session_state[titles_state_key]
+                    if st.checkbox(
+                        title,
+                        value=is_excluded,
+                        key=f"{state_prefix}_checkbox_{title}",
+                    ):
+                        if title not in st.session_state[titles_state_key]:
+                            st.session_state[titles_state_key].append(title)
+                    else:
+                        if title in st.session_state[titles_state_key]:
+                            st.session_state[titles_state_key].remove(title)
 
-        filtered_df = df[df["Product Title"].isin(st.session_state.allowed_titles)]
+            filtered_df = df[
+                ~df["Product Title"].isin(st.session_state[titles_state_key])
+            ]
+        else:
+            with st.expander("Produkttitel auswählen"):
+                st.write(
+                    "Wählen Sie die Produkttitel aus, die angezeigt werden sollen:"
+                )
+
+                for title in all_product_titles:
+                    is_selected = title in st.session_state[titles_state_key]
+                    if st.checkbox(
+                        title,
+                        value=is_selected,
+                        key=f"{state_prefix}_checkbox_{title}",
+                    ):
+                        if title not in st.session_state[titles_state_key]:
+                            st.session_state[titles_state_key].append(title)
+                    else:
+                        if title in st.session_state[titles_state_key]:
+                            st.session_state[titles_state_key].remove(title)
+
+            filtered_df = df[df["Product Title"].isin(st.session_state[titles_state_key])]
 
         unique_values = filtered_df["Product Title"].unique()
 
@@ -234,13 +295,17 @@ def bestellungen_analyse() -> None:
             default=list(unique_values),
         )
 
-
-
         if categories:
             st.write("Bestellungen summiert")
-            filtered_df = df[df["Product Title"].isin(categories)]
+            selected_df = filtered_df[filtered_df["Product Title"].isin(categories)]
+            aggregated_source_df = selected_df.copy()
+            aggregated_source_df["Variant Title"] = aggregated_source_df[
+                "Variant Title"
+            ].fillna("default")
             aggregated_df_summe = (
-                filtered_df.groupby(["Product Title", "Variant Title"])["Quantity"]
+                aggregated_source_df.groupby(["Product Title", "Variant Title"])[
+                    "Quantity"
+                ]
                 .sum()
                 .reset_index()
             )
@@ -258,28 +323,32 @@ def bestellungen_analyse() -> None:
                 "📥 Herunterladen",
             )
 
-            st.write("Brote nach Kunde")
-            filtered_df = df[df["Product Title"].isin(categories)]
-            aggregated_df_kunde = (
-                filtered_df.groupby(
-                    ["Customer", "Product Title", "Variant Title", "Wann bestellt"]
-                )["Quantity"]
-                .sum()
-                .reset_index()
-            )
-            aggregated_df_kunde = aggregated_df_kunde.sort_values(
-                by="Quantity", ascending=False
-            )
-            aggregated_df_kunde = move_column_to_end(
-                aggregated_df_kunde, "Product Title"
-            )
-            kunde_styler = style_variant_matches_today(aggregated_df_kunde)
-            st.dataframe(kunde_styler, hide_index=True)
-            create_excel_download_button(
-                aggregated_df_kunde,
-                f"brote_nach_kunde_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                "📥 Brote nach Kunde herunterladen",
-            )
+            if show_orders_by_customer:
+                st.write("Brote nach Kunde")
+                aggregated_source_df = selected_df.copy()
+                aggregated_source_df["Variant Title"] = aggregated_source_df[
+                    "Variant Title"
+                ].fillna("default")
+                aggregated_df_kunde = (
+                    aggregated_source_df.groupby(
+                        ["Customer", "Product Title", "Variant Title", "Wann bestellt"]
+                    )["Quantity"]
+                    .sum()
+                    .reset_index()
+                )
+                aggregated_df_kunde = aggregated_df_kunde.sort_values(
+                    by="Quantity", ascending=False
+                )
+                aggregated_df_kunde = move_column_to_end(
+                    aggregated_df_kunde, "Product Title"
+                )
+                kunde_styler = style_variant_matches_today(aggregated_df_kunde)
+                st.dataframe(kunde_styler, hide_index=True)
+                create_excel_download_button(
+                    aggregated_df_kunde,
+                    f"brote_nach_kunde_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    "📥 Brote nach Kunde herunterladen",
+                )
         else:
             st.info("Bitte wählen Sie mindestens einen Bestellort aus.")
 

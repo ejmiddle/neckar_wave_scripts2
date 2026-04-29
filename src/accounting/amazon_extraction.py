@@ -10,6 +10,7 @@ from src.accounting.common import (
     format_currency_value,
     format_match_value,
     parse_amount_value,
+    parse_iso_date,
     parse_transaction_date,
 )
 from src.accounting.state import (
@@ -384,11 +385,52 @@ def build_accounting_comparison_rows(
     ]
 
 
+def skipped_receipt_page_reason(extraction_result: dict[str, Any]) -> str | None:
+    extracted = extraction_result.get("extracted")
+    if not isinstance(extracted, dict):
+        return "missing extraction result"
+
+    amount = parse_amount_value(extracted.get("amount"))
+    if amount is None:
+        return "missing amount"
+    if amount <= 0:
+        return "non-positive amount"
+    if parse_iso_date(extracted.get("invoice_date")) is None:
+        return "missing invoice date"
+    return None
+
+
+def annotate_receipt_page_relevance(
+    extraction_results: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    annotated_results: list[dict[str, Any]] = []
+    for extraction_result in extraction_results:
+        skip_reason = skipped_receipt_page_reason(extraction_result)
+        extraction_result["isMeaningfulReceiptPage"] = skip_reason is None
+        if skip_reason is None:
+            extraction_result.pop("skipReason", None)
+        else:
+            extraction_result["skipReason"] = skip_reason
+        annotated_results.append(extraction_result)
+    return annotated_results
+
+
+def meaningful_receipt_extraction_results(
+    extraction_results: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return [
+        extraction_result
+        for extraction_result in extraction_results
+        if skipped_receipt_page_reason(extraction_result) is None
+    ]
+
+
 def sum_extracted_pdf_amounts(extraction_results: list[dict[str, Any]]) -> float | None:
-    if not extraction_results:
+    meaningful_results = meaningful_receipt_extraction_results(extraction_results)
+    if not meaningful_results:
         return None
     amounts: list[float] = []
-    for extraction_result in extraction_results:
+    for extraction_result in meaningful_results:
         extracted = extraction_result.get("extracted")
         if not isinstance(extracted, dict):
             return None
@@ -412,6 +454,8 @@ def build_aggregate_accounting_comparison_rows(
     extraction_results: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     summed_amount = sum_extracted_pdf_amounts(extraction_results)
+    meaningful_results = meaningful_receipt_extraction_results(extraction_results)
+    skipped_count = len(extraction_results) - len(meaningful_results)
     return [
         {
             "field": "Betrag (Summe PDFs)",
@@ -428,7 +472,13 @@ def build_aggregate_accounting_comparison_rows(
         {
             "field": "Anzahl Seiten-Belege",
             "booking": "-",
-            "pdf": str(len(extraction_results)),
+            "pdf": str(len(meaningful_results)),
+            "match": "-",
+        },
+        {
+            "field": "Ignorierte Seiten",
+            "booking": "-",
+            "pdf": str(skipped_count),
             "match": "-",
         },
     ]

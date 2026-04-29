@@ -79,7 +79,7 @@ def parse_args() -> argparse.Namespace:
     export_buchunggskonten_parser.add_argument(
         "--output",
         default=str(DEFAULT_BUCHUNGGSKONTEN_EXPORT_PATH),
-        help='Output JSON path (default: data/sevdesk/informationen/buchunggskonten.json)',
+        help='Output JSON path (default: data/sevdesk/exports/account_guidance/buchunggskonten.json)',
     )
     export_buchunggskonten_parser.add_argument(
         "--include-inactive",
@@ -100,7 +100,7 @@ def parse_args() -> argparse.Namespace:
     export_zahlungskonten_parser.add_argument(
         "--output",
         default=str(DEFAULT_ZAHLUNGSKONTEN_EXPORT_PATH),
-        help="Output JSON path (default: data/sevdesk/informationen/zahlungskonten.json)",
+        help="Output JSON path (default: data/sevdesk/exports/account_guidance/zahlungskonten.json)",
     )
     export_zahlungskonten_parser.add_argument(
         "--include-inactive",

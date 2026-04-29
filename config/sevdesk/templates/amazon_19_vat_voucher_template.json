@@ -1,0 +1,69 @@
+{
+  "voucher": {
+    "objectName": "Voucher",
+    "mapAll": true,
+    "voucherType": "VOU",
+    "creditDebit": "C",
+    "status": 50,
+    "voucherDate": "{{ belegdatum_dd_mm_yyyy }}",
+    "deliveryDate": "{{ lieferdatum_dd_mm_yyyy }}",
+    "paymentDeadline": "{{ zahlungsziel_dd_mm_yyyy }}",
+    "currency": "EUR",
+    "description": "{{ rechnungs_oder_bestellnummer }}",
+    "supplierName": "{{ lieferantenname_z_b_amazon_eu_de }}",
+    "taxRule": {
+      "id": 9,
+      "objectName": "TaxRule"
+    },
+    "taxType": "default",
+    "costCentre": null,
+    "document": null,
+    "checkAccount": {
+      "id": "{{ check_account_id }}",
+      "objectName": "CheckAccount"
+    },
+    "supplier": {
+      "id": "{{ supplier_contact_id }}",
+      "objectName": "Contact"
+    }
+  },
+  "voucherPosSave": [
+    {
+      "objectName": "VoucherPos",
+      "mapAll": true,
+      "net": false,
+      "taxRate": 19.0,
+      "sumGross": "{{ brutto_betrag }}",
+      "sumNet": "{{ netto_betrag }}",
+      "comment": "{{ positionskommentar_z_b_amazon_buerobedarf }}",
+      "accountingType": {
+        "id": "{{ accounting_type_id }}",
+        "objectName": "AccountingType"
+      }
+    }
+  ],
+  "voucherPosDelete": null,
+  "filename": null,
+  "notes": {
+    "template_case": "Amazon receipt with 19% Umsatzsteuer / default tax setting",
+    "adjust_these_fields_every_time": [
+      "voucher.voucherDate",
+      "voucher.deliveryDate",
+      "voucher.paymentDeadline",
+      "voucher.description",
+      "voucher.supplierName",
+      "voucher.supplier.id",
+      "voucher.checkAccount.id",
+      "voucherPosSave[0].sumGross",
+      "voucherPosSave[0].sumNet",
+      "voucherPosSave[0].comment",
+      "voucherPosSave[0].accountingType.id"
+    ],
+    "expected_fixed_values": {
+      "voucher.taxRule.id": 9,
+      "voucher.taxType": "default",
+      "voucherPosSave[0].taxRate": 19.0
+    },
+    "validation_hint": "Use this template only when the Amazon receipt shows regular 19% VAT."
+  }
+}

@@ -13,12 +13,16 @@ from src.accounting.master_data import (
     format_tax_rule_row,
     load_stored_tax_rules,
 )
+from src.sevdesk.constants import (
+    KRANKENKASSE_TEMPLATE_PATH,
+    KRANKENKASSE_U1_TEMPLATE_PATH,
+    LOHN_TEMPLATE_PATH,
+    STEUER_LOHN_TEMPLATE_PATH,
+)
 from src.sevdesk.voucher import normalize_create_payload
 
-TEMPLATE_PATH = Path("data/sevdesk/templates/krankenkasse_u1_voucher_template.json")
-LOHNVOUCHER_TEMPLATE_PATH = Path("data/sevdesk/templates/lohn_voucher_template.json")
-KRANKENKASSE_TEMPLATE_PATH = Path("data/sevdesk/templates/krankenkasse_voucher_template.json")
-STEUER_LOHN_TEMPLATE_PATH = Path("data/sevdesk/templates/steuer_lohn_voucher_template.json")
+TEMPLATE_PATH = KRANKENKASSE_U1_TEMPLATE_PATH
+LOHNVOUCHER_TEMPLATE_PATH = LOHN_TEMPLATE_PATH
 DEFAULT_ACCOUNTING_TYPE_NAME = "Krankenkasse"
 DEFAULT_LOHN_ACCOUNTING_TYPE_NAME = "Lohn / Gehalt"
 DEFAULT_STEUER_ACCOUNTING_TYPE_NAME = "Pauschale Steuer für Aushilfen"

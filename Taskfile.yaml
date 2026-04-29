@@ -70,10 +70,23 @@ tasks:
           IMAGE: ghcr.io/ejmiddle/neckarwave-scripts-accounting
 
   acc_docker_publish:
-    desc: Build then push the accounting Streamlit app image
+    desc: Build, push, and deploy the accounting Streamlit app to Mittwald
     cmds:
       - task: acc_docker_build
       - task: acc_docker_push
+      - task: acc_mittwald_deploy
+
+  acc_mittwald_sync_secrets:
+    desc: Sync accounting env vars from the encrypted deploy config into Mittwald
+    deps: [dev_install]
+    cmds:
+      - sh -c 'if [ -f .env ]; then set -a; . ./.env; set +a; fi; UV_CACHE_DIR=.uv-cache uv run python scripts/deploy_mittwald_service.py sync-secrets --project suedseite --service accounting --env-file config/secrets/production.enc.env --env-keys-file config/deploy/accounting.env.keys --recreate'
+
+  acc_mittwald_deploy:
+    desc: Sync accounting env vars in Mittwald and pull/recreate the accounting image
+    deps: [dev_install]
+    cmds:
+      - sh -c 'if [ -f .env ]; then set -a; . ./.env; set +a; fi; UV_CACHE_DIR=.uv-cache uv run python scripts/deploy_mittwald_service.py publish --project suedseite --service accounting --image ghcr.io/ejmiddle/neckarwave-scripts-accounting:latest --env-file config/secrets/production.enc.env --env-keys-file config/deploy/accounting.env.keys'
 
   acc_docker_run:
     desc: Run the accounting app container locally on port 8081 with live source mounts

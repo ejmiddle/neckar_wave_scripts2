@@ -1,0 +1,74 @@
+{
+  "voucher": {
+    "objectName": "Voucher",
+    "mapAll": true,
+    "voucherType": "VOU",
+    "creditDebit": "C",
+    "status": 50,
+    "voucherDate": "{{ belegdatum_dd_mm_yyyy }}",
+    "deliveryDate": "{{ lieferdatum_dd_mm_yyyy }}",
+    "paymentDeadline": "{{ zahlungsziel_dd_mm_yyyy }}",
+    "currency": "EUR",
+    "description": "{{ rechnungs_oder_bestellnummer }}",
+    "supplierName": "{{ lieferantenname }}",
+    "taxRule": {
+      "id": 3,
+      "objectName": "TaxRule"
+    },
+    "taxType": "custom",
+    "costCentre": null,
+    "document": null,
+    "checkAccount": {
+      "id": "{{ check_account_id }}",
+      "objectName": "CheckAccount"
+    },
+    "taxSet": {
+      "id": "121404",
+      "objectName": "TaxSet"
+    },
+    "supplier": {
+      "id": "{{ supplier_contact_id }}",
+      "objectName": "Contact"
+    }
+  },
+  "voucherPosSave": [
+    {
+      "objectName": "VoucherPos",
+      "mapAll": true,
+      "net": false,
+      "taxRate": 0.0,
+      "sumGross": "{{ brutto_betrag }}",
+      "sumNet": "{{ netto_betrag_meist_gleich_brutto }}",
+      "comment": "{{ positionskommentar_z_b_amazon_sonstiges_material }}",
+      "accountingType": {
+        "id": "{{ accounting_type_id }}",
+        "objectName": "AccountingType"
+      }
+    }
+  ],
+  "voucherPosDelete": null,
+  "filename": null,
+  "notes": {
+    "template_case": "Amazon innergemeinschaftliche Lieferung / 0% Umsatzsteuer / custom tax setting",
+    "adjust_these_fields_every_time": [
+      "voucher.voucherDate",
+      "voucher.deliveryDate",
+      "voucher.paymentDeadline",
+      "voucher.description",
+      "voucher.supplierName",
+      "voucher.supplier.id",
+      "voucher.checkAccount.id",
+      "voucherPosSave[0].sumGross",
+      "voucherPosSave[0].sumNet",
+      "voucherPosSave[0].comment",
+      "voucherPosSave[0].accountingType.id"
+    ],
+    "expected_fixed_values": {
+      "voucher.taxRule.id": 3,
+      "voucher.taxType": "custom",
+      "voucher.taxSet.id": "121404",
+      "voucherPosSave[0].taxRate": 0.0
+    },
+    "validation_hint": "For this template the receipt should be an innergemeinschaftlich Amazon invoice with 0% VAT and the custom Sevdesk tax setting."
+  }
+}
