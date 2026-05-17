@@ -1,15 +1,15 @@
-# syntax=docker/dockerfile:1.5
-FROM python:3.12-slim
+ARG BASE_IMAGE=python:3.12-slim
+FROM ${BASE_IMAGE}
 
 ARG STREAMLIT_APP_FILE=apps/main.py
 
 WORKDIR /app
-RUN --mount=type=cache,target=/root/.cache/uv pip install --no-cache-dir uv
+RUN pip install --no-cache-dir uv
 
 COPY pyproject.toml /app/pyproject.toml
 COPY uv.lock /app/uv.lock
 # Install all runtime dependencies from lockfile.
-RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev --no-install-project
+RUN uv sync --frozen --no-dev --no-install-project
 
 # Copy application sources and runtime assets.
 COPY apps /app/apps

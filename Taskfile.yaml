@@ -32,10 +32,23 @@ tasks:
           IMAGE: ghcr.io/ejmiddle/neckarwave-scripts-main
 
   main_docker_publish:
-    desc: Build then push the main Streamlit app image
+    desc: Build, push, and deploy the main Streamlit app to Mittwald
     cmds:
       - task: main_docker_build
       - task: main_docker_push
+      - task: main_mittwald_deploy
+
+  main_mittwald_sync_secrets:
+    desc: Sync main app env vars from the encrypted deploy config into Mittwald
+    deps: [dev_install]
+    cmds:
+      - sh -c 'if [ -f .env ]; then set -a; . ./.env; set +a; fi; UV_CACHE_DIR=.uv-cache uv run python scripts/deploy_mittwald_service.py sync-secrets --project suedseite --service "${MAIN_MITTWALD_SERVICE:-testcontainer}" --env-file config/secrets/production.enc.env --env-keys-file config/deploy/main.env.keys --recreate'
+
+  main_mittwald_deploy:
+    desc: Sync main app env vars in Mittwald and pull/recreate the main image
+    deps: [dev_install]
+    cmds:
+      - sh -c 'if [ -f .env ]; then set -a; . ./.env; set +a; fi; UV_CACHE_DIR=.uv-cache uv run python scripts/deploy_mittwald_service.py publish --project suedseite --service "${MAIN_MITTWALD_SERVICE:-testcontainer}" --image ghcr.io/ejmiddle/neckarwave-scripts-main:latest --env-file config/secrets/production.enc.env --env-keys-file config/deploy/main.env.keys'
 
   main_docker_run:
     desc: Run the main app container locally on port 8080 with live source mounts
@@ -224,7 +237,7 @@ tasks:
   _docker_build_streamlit_app:
     internal: true
     cmds:
-      - sh -c 'if [ "${DOCKER_BUILD_REGISTRY_CACHE:-0}" = "1" ]; then docker buildx build --platform linux/amd64 --pull --build-arg STREAMLIT_APP_FILE={{.APP_ENTRYPOINT}} --cache-from type=registry,ref={{.IMAGE}}:buildcache --cache-to type=registry,ref={{.IMAGE}}:buildcache,mode=max -t {{.IMAGE}}:latest --load -f Dockerfile .; else docker buildx build --platform linux/amd64 --pull --build-arg STREAMLIT_APP_FILE={{.APP_ENTRYPOINT}} -t {{.IMAGE}}:latest --load -f Dockerfile .; fi'
+      - sh -c 'if [ -f .env ]; then . ./.env; fi; PULL_FLAG=""; if [ "${DOCKER_BUILD_PULL:-1}" = "1" ]; then PULL_FLAG="--pull"; fi; BASE_IMAGE="${BASE_IMAGE:-python:3.12-slim}"; echo "Using BASE_IMAGE=${BASE_IMAGE}"; if [ -z "${PULL_FLAG}" ] && ! docker image inspect "${BASE_IMAGE}" >/dev/null 2>&1; then echo "Local image ${BASE_IMAGE} not found and DOCKER_BUILD_PULL=0; set DOCKER_BUILD_PULL=1 or provide a local/base mirror."; exit 1; fi; if [ "${DOCKER_BUILD_REGISTRY_CACHE:-0}" = "1" ]; then docker buildx build --platform linux/amd64 ${PULL_FLAG} --build-arg BASE_IMAGE="${BASE_IMAGE}" --build-arg STREAMLIT_APP_FILE={{.APP_ENTRYPOINT}} --cache-from type=registry,ref={{.IMAGE}}:buildcache --cache-to type=registry,ref={{.IMAGE}}:buildcache,mode=max -t {{.IMAGE}}:latest --load -f Dockerfile .; else docker buildx build --platform linux/amd64 ${PULL_FLAG} --build-arg BASE_IMAGE="${BASE_IMAGE}" --build-arg STREAMLIT_APP_FILE={{.APP_ENTRYPOINT}} -t {{.IMAGE}}:latest --load -f Dockerfile .; fi'
       - echo "docker images {{.IMAGE}}:latest"
 
   _docker_push_streamlit_app:
@@ -237,7 +250,7 @@ tasks:
   dev_docker_build_fastapi_amd64:
     desc: Build amd64 FastAPI backend image
     cmds:
-      - sh -c 'if [ "${DOCKER_BUILD_REGISTRY_CACHE:-0}" = "1" ]; then docker buildx build --platform linux/amd64 --cache-from type=registry,ref=ghcr.io/ejmiddle/neckarwave-scripts-fastapi:buildcache --cache-to type=registry,ref=ghcr.io/ejmiddle/neckarwave-scripts-fastapi:buildcache,mode=max -t ghcr.io/ejmiddle/neckarwave-scripts-fastapi:latest --load -f Dockerfile.fastapi .; else docker buildx build --platform linux/amd64 -t ghcr.io/ejmiddle/neckarwave-scripts-fastapi:latest --load -f Dockerfile.fastapi .; fi'
+      - sh -c 'if [ -f .env ]; then . ./.env; fi; PULL_FLAG=""; if [ "${DOCKER_BUILD_PULL:-1}" = "1" ]; then PULL_FLAG="--pull"; fi; BASE_IMAGE="${BASE_IMAGE:-python:3.12-slim}"; echo "Using BASE_IMAGE=${BASE_IMAGE}"; if [ -z "${PULL_FLAG}" ] && ! docker image inspect "${BASE_IMAGE}" >/dev/null 2>&1; then echo "Local image ${BASE_IMAGE} not found and DOCKER_BUILD_PULL=0; set DOCKER_BUILD_PULL=1 or provide a local/base mirror."; exit 1; fi; if [ "${DOCKER_BUILD_REGISTRY_CACHE:-0}" = "1" ]; then docker buildx build --platform linux/amd64 ${PULL_FLAG} --build-arg BASE_IMAGE="${BASE_IMAGE}" --cache-from type=registry,ref=ghcr.io/ejmiddle/neckarwave-scripts-fastapi:buildcache --cache-to type=registry,ref=ghcr.io/ejmiddle/neckarwave-scripts-fastapi:buildcache,mode=max -t ghcr.io/ejmiddle/neckarwave-scripts-fastapi:latest --load -f Dockerfile.fastapi .; else docker buildx build --platform linux/amd64 ${PULL_FLAG} --build-arg BASE_IMAGE="${BASE_IMAGE}" -t ghcr.io/ejmiddle/neckarwave-scripts-fastapi:latest --load -f Dockerfile.fastapi .; fi'
 
   dev_docker_push_fastapi:
     desc: Push FastAPI backend image and build cache to GHCR

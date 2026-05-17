@@ -1,4 +1,5 @@
 from datetime import date, timedelta
+from inspect import signature
 
 import pandas as pd
 import streamlit as st
@@ -11,8 +12,11 @@ from src.accounting.common import (
     parse_transaction_date,
     report_error,
 )
-from src.logging_config import logger
 from src.accounting.master_data import load_stored_check_accounts
+from src.accounting.payment_vouchers import (
+    TRANSFER_VOUCHER_SUPPLIER_OPTIONS,
+    build_transfer_voucher_payload,
+)
 from src.accounting.state import TRANSACTION_STATUS_LABELS
 from src.accounting.ui.displays import show_selectable_transactions
 from src.accounting.ui.filter_utils import (
@@ -23,11 +27,13 @@ from src.accounting.ui.filter_utils import (
     sync_multiselect_options,
     validate_date_range,
 )
-from src.sevdesk.api import fetch_all_transactions_for_check_account
+from src.logging_config import logger
+from src.sevdesk.api import create_voucher, fetch_all_transactions_for_check_account
 from src.sevdesk.payments import (
     move_transaction_to_check_account,
     move_transaction_to_check_account_old_logic,
 )
+from src.sevdesk.voucher import first_object_from_response
 
 PAYMENTS_ROWS_KEY = "sevdesk_payments_rows"
 PAYMENTS_SOURCE_ACCOUNT_KEY = "sevdesk_payments_source_account"
@@ -43,11 +49,22 @@ PAYMENTS_SELECTION_TABLE_KEY = "sevdesk_payments_selection_table"
 PAYMENTS_SELECTED_IDS_KEY = "sevdesk_payments_selected_ids"
 PAYMENTS_TARGET_ACCOUNT_KEY = "sevdesk_payments_target_account"
 PAYMENTS_RESULTS_KEY = "sevdesk_payments_results"
+PAYMENTS_ACTION_KEY = "sevdesk_payments_action"
+PAYMENTS_TRANSFER_VOUCHER_SUPPLIER_KEY = "sevdesk_payments_transfer_voucher_supplier"
+PAYMENTS_TRANSFER_VOUCHER_RESULTS_KEY = "sevdesk_payments_transfer_voucher_results"
+PAYMENTS_TRANSFER_VOUCHER_CREATED_IDS_KEY = "sevdesk_payments_transfer_voucher_created_ids"
+PAYMENTS_DEFAULT_LOAD_DAYS = 60
 
 PAYMENT_DIRECTION_OPTIONS = {
     "all": "Alle Beträge",
     "incoming": "Nur Eingänge",
     "outgoing": "Nur Ausgänge",
+}
+
+PAYMENT_ACTION_LABELS = {
+    "create_transfer_vouchers": "Geldtransfer-Belege erstellen",
+    "transfer_to_clearing": "Auf Verrechnungskonto umbuchen",
+    "move_bookings": "Buchungen vollständig verschieben",
 }
 
 
@@ -70,12 +87,35 @@ def _status_option_label(status: str) -> str:
     return f"{status or '-'} - {meaning}"
 
 
-def _load_payments_for_check_account(source_check_account_id: str) -> list[dict]:
+def _load_payments_for_check_account(
+    source_check_account_id: str,
+    *,
+    start_date: date | None,
+    end_date: date | None,
+) -> list[dict]:
     token = ensure_token()
     if not token:
         return []
     with st.spinner("Zahlungen werden aus sevDesk geladen..."):
-        return fetch_all_transactions_for_check_account(base_url(), token, source_check_account_id)
+        helper_signature = signature(fetch_all_transactions_for_check_account)
+        if "start_date" in helper_signature.parameters:
+            return fetch_all_transactions_for_check_account(
+                base_url(),
+                token,
+                source_check_account_id,
+                start_date=start_date,
+                end_date=end_date,
+            )
+        rows = fetch_all_transactions_for_check_account(base_url(), token, source_check_account_id)
+        return [
+            row
+            for row in rows
+            if is_within_date_range(
+                parse_transaction_date(row),
+                start_date=start_date,
+                end_date=end_date,
+            )
+        ]
 
 
 def _render_payment_results() -> None:
@@ -90,6 +130,90 @@ def _render_payment_results() -> None:
     else:
         st.success(f"{success_count} payments reassigned successfully.")
     st.dataframe(pd.DataFrame(results), width="stretch", hide_index=True)
+
+
+def _render_transfer_voucher_results() -> None:
+    results = st.session_state.get(PAYMENTS_TRANSFER_VOUCHER_RESULTS_KEY)
+    if not isinstance(results, list) or not results:
+        return
+    st.markdown("**Geldtransfer-Belege**")
+    success_count = sum(1 for row in results if row.get("result") == "success")
+    error_count = len(results) - success_count
+    if error_count:
+        st.warning(f"{success_count} Belege erstellt, {error_count} fehlgeschlagen.")
+    else:
+        st.success(f"{success_count} Belege erstellt.")
+    st.dataframe(pd.DataFrame(results), width="stretch", hide_index=True)
+
+
+def _created_transfer_voucher_transaction_ids() -> set[str]:
+    return {
+        str(value).strip()
+        for value in st.session_state.get(PAYMENTS_TRANSFER_VOUCHER_CREATED_IDS_KEY, [])
+        if str(value).strip()
+    }
+
+
+def _run_create_transfer_vouchers(
+    *,
+    selected_rows: list[dict],
+    supplier_name: str,
+) -> None:
+    token = ensure_token()
+    if not token:
+        return
+
+    results: list[dict[str, str]] = []
+    created_transaction_ids = _created_transfer_voucher_transaction_ids()
+    with st.spinner("Geldtransfer-Belege werden in sevDesk erstellt..."):
+        for row in selected_rows:
+            transaction_id = str(row.get("id", "")).strip()
+            if transaction_id in created_transaction_ids:
+                continue
+            try:
+                payload = build_transfer_voucher_payload(row, supplier_name)
+                response_payload = create_voucher(base_url(), token, payload)
+                created_summary = first_object_from_response(response_payload) or {}
+                created_id = str(created_summary.get("id", "")).strip()
+                if transaction_id:
+                    created_transaction_ids.add(transaction_id)
+                results.append(
+                    {
+                        "result": "success",
+                        "transactionId": transaction_id or "-",
+                        "voucherId": created_id or "-",
+                        "lieferant": supplier_name,
+                        "betrag": str(row.get("amount", "")).strip() or "-",
+                        "payeePayerName": str(row.get("payeePayerName", "")).strip() or "-",
+                        "message": "Beleg erstellt.",
+                    }
+                )
+            except Exception as exc:
+                logger.exception(
+                    "Failed to create transfer voucher for payment id=%s supplier=%s.",
+                    transaction_id,
+                    supplier_name,
+                )
+                results.append(
+                    {
+                        "result": "error",
+                        "transactionId": transaction_id or "-",
+                        "voucherId": "-",
+                        "lieferant": supplier_name,
+                        "betrag": str(row.get("amount", "")).strip() or "-",
+                        "payeePayerName": str(row.get("payeePayerName", "")).strip() or "-",
+                        "message": str(exc),
+                    }
+                )
+
+    st.session_state[PAYMENTS_TRANSFER_VOUCHER_RESULTS_KEY] = results
+    st.session_state[PAYMENTS_TRANSFER_VOUCHER_CREATED_IDS_KEY] = sorted(created_transaction_ids)
+    if created_transaction_ids:
+        st.session_state[PAYMENTS_SELECTED_IDS_KEY] = [
+            transaction_id
+            for transaction_id in st.session_state.get(PAYMENTS_SELECTED_IDS_KEY, [])
+            if str(transaction_id).strip() not in created_transaction_ids
+        ]
 
 
 def _updated_transaction_from_result(result: dict) -> dict | None:
@@ -284,22 +408,48 @@ def render_payments_section() -> None:
         st.info("Stored check accounts are missing usable ids. Refresh them in Accounting MD first.")
         return
 
+    default_end_date = st.session_state.get(PAYMENTS_END_DATE_KEY) or date.today()
+    default_start_date = st.session_state.get(PAYMENTS_START_DATE_KEY) or (
+        default_end_date - timedelta(days=PAYMENTS_DEFAULT_LOAD_DAYS)
+    )
+
     with st.form("sevdesk_payments_form"):
         st.selectbox(
             "Quellkonto",
             options=list(account_options.keys()),
             key=PAYMENTS_SOURCE_ACCOUNT_KEY,
         )
+        load_date_col1, load_date_col2 = st.columns(2)
+        with load_date_col1:
+            st.date_input("Wertstellung ab", value=default_start_date, key=PAYMENTS_START_DATE_KEY)
+        with load_date_col2:
+            st.date_input("Wertstellung bis", value=default_end_date, key=PAYMENTS_END_DATE_KEY)
         submit = st.form_submit_button("Zahlungen laden", width="stretch")
 
     if submit:
         try:
             selected_source_label = str(st.session_state.get(PAYMENTS_SOURCE_ACCOUNT_KEY, "")).strip()
             source_account_id = account_options[selected_source_label]
-            st.session_state[PAYMENTS_ROWS_KEY] = _load_payments_for_check_account(source_account_id)
+            start_date = st.session_state.get(PAYMENTS_START_DATE_KEY)
+            end_date = st.session_state.get(PAYMENTS_END_DATE_KEY)
+            if not validate_date_range(
+                start_date,
+                end_date,
+                start_label="Wertstellung ab",
+                end_label="Wertstellung bis",
+            ):
+                return
+            st.session_state[PAYMENTS_ROWS_KEY] = _load_payments_for_check_account(
+                source_account_id,
+                start_date=start_date,
+                end_date=end_date,
+            )
             st.session_state[PAYMENTS_SELECTED_IDS_KEY] = []
             st.session_state.pop(PAYMENTS_SELECTION_TABLE_KEY, None)
             st.session_state.pop(PAYMENTS_RESULTS_KEY, None)
+            st.session_state.pop(PAYMENTS_TRANSFER_VOUCHER_RESULTS_KEY, None)
+            st.session_state.pop(PAYMENTS_TRANSFER_VOUCHER_CREATED_IDS_KEY, None)
+            st.session_state.pop(PAYMENTS_ACTION_KEY, None)
         except Exception as exc:
             report_error(
                 f"Failed to load payments: {exc}",
@@ -311,10 +461,11 @@ def render_payments_section() -> None:
     if rows is None:
         st.caption("Select a source check account and load payments.")
         return
-
-    default_end_date = st.session_state.get(PAYMENTS_END_DATE_KEY) or date.today()
-    default_start_date = st.session_state.get(PAYMENTS_START_DATE_KEY) or (
-        default_end_date - timedelta(days=30)
+    st.markdown("**Transaktionen filtern**")
+    st.caption(
+        "Geladener Zeitraum: "
+        f"{st.session_state.get(PAYMENTS_START_DATE_KEY)} bis "
+        f"{st.session_state.get(PAYMENTS_END_DATE_KEY)}"
     )
     status_options = build_status_filter_options(
         rows,
@@ -327,30 +478,31 @@ def render_payments_section() -> None:
         PAYMENTS_STATUS_FILTER_OPTIONS_KEY,
         status_labels,
     )
-    filter_col1, filter_col2, filter_col3 = st.columns(3)
-    with filter_col1:
-        st.date_input("Wertstellung ab", value=default_start_date, key=PAYMENTS_START_DATE_KEY)
-        st.date_input("Wertstellung bis", value=default_end_date, key=PAYMENTS_END_DATE_KEY)
-    with filter_col2:
+    search_col, status_col = st.columns([2, 1])
+    with search_col:
         st.text_input(
-            "Suche in Zahlung",
+            "Suche",
             key=PAYMENTS_TEXT_QUERY_KEY,
             help="Matches payee/payer, payment purpose, entry text, and payment id.",
         )
+    with status_col:
         st.multiselect(
-            "Status filter",
+            "Status",
             options=status_labels,
             key=PAYMENTS_STATUS_FILTER_KEY,
             disabled=not status_labels,
         )
-    with filter_col3:
+    amount_col1, amount_col2, amount_col3 = st.columns(3)
+    with amount_col1:
         st.selectbox(
             "Betragsrichtung",
             options=list(PAYMENT_DIRECTION_OPTIONS.keys()),
             format_func=lambda option: PAYMENT_DIRECTION_OPTIONS[option],
             key=PAYMENTS_DIRECTION_KEY,
         )
+    with amount_col2:
         st.text_input("Betrag min", key=PAYMENTS_MIN_AMOUNT_KEY)
+    with amount_col3:
         st.text_input("Betrag max", key=PAYMENTS_MAX_AMOUNT_KEY)
 
     start_date = st.session_state.get(PAYMENTS_START_DATE_KEY)
@@ -388,13 +540,15 @@ def render_payments_section() -> None:
         row for row in filtered_rows if str(row.get("id", "")).strip() in selected_payment_id_set
     ]
 
+    st.markdown("**Aktion für Auswahl**")
     if selected_rows:
+        selected_sum = sum(parse_amount_value(row.get("amount")) or 0.0 for row in selected_rows)
         st.caption(
-            f"Selected payments: {len(selected_rows)} | Summe: "
-            f"{format_currency_value(sum(parse_amount_value(row.get('amount')) or 0.0 for row in selected_rows))}"
+            f"Ausgewählte Zahlungen: {len(selected_rows)} | Summe: "
+            f"{format_currency_value(selected_sum)}"
         )
     else:
-        st.caption("Select one or more payments in the table above.")
+        st.caption("Wähle eine oder mehrere Zahlungen in der Tabelle aus.")
 
     selected_source_label = str(st.session_state.get(PAYMENTS_SOURCE_ACCOUNT_KEY, "")).strip()
     target_options = {
@@ -402,58 +556,109 @@ def render_payments_section() -> None:
         for label, account_id in account_options.items()
         if account_id != account_options[selected_source_label]
     }
-    if not target_options:
-        st.info("No alternative target check account is available for reassignment.")
+    created_transfer_voucher_ids = _created_transfer_voucher_transaction_ids()
+    voucher_candidate_rows = [
+        row
+        for row in selected_rows
+        if str(row.get("id", "")).strip() not in created_transfer_voucher_ids
+    ]
+    already_created_count = len(selected_rows) - len(voucher_candidate_rows)
+
+    action_options = ["create_transfer_vouchers"]
+    if target_options:
+        action_options.extend(["transfer_to_clearing", "move_bookings"])
+
+    if already_created_count:
+        st.success(
+            f"Für {already_created_count} der ausgewählten Zahlungen wurden bereits "
+            "Geldtransfer-Belege erstellt."
+        )
+
+    if not action_options:
+        st.info("Für die aktuelle Auswahl ist keine weitere Aktion verfügbar.")
         _render_payment_results()
+        _render_transfer_voucher_results()
         return
+    if st.session_state.get(PAYMENTS_ACTION_KEY) not in action_options:
+        st.session_state[PAYMENTS_ACTION_KEY] = action_options[0]
 
-    selected_target_label = st.selectbox(
-        "Zielkonto",
-        options=list(target_options.keys()),
-        key=PAYMENTS_TARGET_ACCOUNT_KEY,
-        help="The currently selected source account is excluded from the target list.",
+    selected_action = st.selectbox(
+        "Aktion",
+        options=action_options,
+        format_func=lambda option: PAYMENT_ACTION_LABELS[option],
+        key=PAYMENTS_ACTION_KEY,
     )
-    if selected_source_label:
-        st.caption(f"`{selected_source_label}` is hidden here because it is the selected `Quellkonto`.")
 
-    selected_source_account_id = account_options[selected_source_label]
-    selected_target_account_id = target_options[selected_target_label]
-    source_account_name = str(account_rows_by_id.get(selected_source_account_id, {}).get("name", "")).strip()
-    target_account_type = str(account_rows_by_id.get(selected_target_account_id, {}).get("type", "")).strip()
-
-    action_col1, action_col2 = st.columns(2)
-    with action_col1:
-        if st.button(
-            "Auf Verrechnungskonto umbuchen",
-            width="stretch",
-            disabled=not selected_rows,
-            type="primary",
-        ):
-            _run_transfer_action(
-                action_label="Auf Verrechnungskonto umbuchen",
-                all_rows=rows,
-                selected_rows=selected_rows,
-                selected_source_account_id=selected_source_account_id,
-                selected_target_account_id=selected_target_account_id,
-                source_account_name=source_account_name,
-                target_account_type=target_account_type,
-                transfer_function=move_transaction_to_check_account,
+    if selected_action == "create_transfer_vouchers":
+        supplier_name = st.selectbox(
+            "Lieferant",
+            options=list(TRANSFER_VOUCHER_SUPPLIER_OPTIONS.keys()),
+            key=PAYMENTS_TRANSFER_VOUCHER_SUPPLIER_KEY,
+        )
+        preview_rows = []
+        for row in voucher_candidate_rows:
+            amount = parse_amount_value(row.get("amount")) or 0.0
+            preview_rows.append(
+                {
+                    "transactionId": str(row.get("id", "")).strip(),
+                    "Lieferant": supplier_name,
+                    "Betrag": format_currency_value(abs(amount)),
+                    "Richtung": "Einnahme" if amount > 0 else "Ausgabe",
+                    "Belegbeschreibung": "Umbuchung",
+                }
             )
-    with action_col2:
+        if preview_rows:
+            st.dataframe(pd.DataFrame(preview_rows), width="stretch", hide_index=True)
+        elif selected_rows:
+            st.caption("Für die aktuelle Auswahl wurden bereits Geldtransfer-Belege erstellt.")
+        else:
+            st.caption("Wähle Zahlungen aus, um die Belegvorschau zu sehen.")
         if st.button(
-            "Buchungen vollständig verschieben",
+            "Geldtransfer-Belege erstellen",
             width="stretch",
-            disabled=not selected_rows,
+            type="primary",
+            disabled=not voucher_candidate_rows,
         ):
+            _run_create_transfer_vouchers(
+                selected_rows=voucher_candidate_rows,
+                supplier_name=supplier_name,
+            )
+
+    if selected_action in {"transfer_to_clearing", "move_bookings"}:
+        selected_target_label = st.selectbox(
+            "Zielkonto",
+            options=list(target_options.keys()),
+            key=PAYMENTS_TARGET_ACCOUNT_KEY,
+            help="The currently selected source account is excluded from the target list.",
+        )
+        if selected_source_label:
+            st.caption(f"`{selected_source_label}` ist hier ausgeblendet, weil es das Quellkonto ist.")
+
+        selected_source_account_id = account_options[selected_source_label]
+        selected_target_account_id = target_options[selected_target_label]
+        source_account_name = str(
+            account_rows_by_id.get(selected_source_account_id, {}).get("name", "")
+        ).strip()
+        target_account_type = str(
+            account_rows_by_id.get(selected_target_account_id, {}).get("type", "")
+        ).strip()
+        action_label = PAYMENT_ACTION_LABELS[selected_action]
+        transfer_function = (
+            move_transaction_to_check_account
+            if selected_action == "transfer_to_clearing"
+            else move_transaction_to_check_account_old_logic
+        )
+        if st.button(action_label, width="stretch", type="primary", disabled=not selected_rows):
             _run_transfer_action(
-                action_label="Buchungen vollständig verschieben",
+                action_label=action_label,
                 all_rows=rows,
                 selected_rows=selected_rows,
                 selected_source_account_id=selected_source_account_id,
                 selected_target_account_id=selected_target_account_id,
                 source_account_name=source_account_name,
                 target_account_type=target_account_type,
-                transfer_function=move_transaction_to_check_account_old_logic,
+                transfer_function=transfer_function,
             )
 
     _render_payment_results()
+    _render_transfer_voucher_results()

@@ -39,7 +39,6 @@ token.json
 logs/
 *.log
 .task/
-workspace/
 
 # Existing project-specific ignores
 uv.lock

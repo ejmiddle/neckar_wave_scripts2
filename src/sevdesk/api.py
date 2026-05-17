@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import mimetypes
 import os
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -698,7 +698,7 @@ def request_vouchers_with_tags(
     return enriched_vouchers
 
 
-def request_vouchers_with_tags_for_contacts(
+def request_vouchers_for_contacts(
     base_url: str,
     token: str,
     limit: int,
@@ -719,7 +719,7 @@ def request_vouchers_with_tags_for_contacts(
     base_filters = dict(filters or {})
 
     logger.info(
-        "Loading sevDesk vouchers for %s contact filters with requested limit=%s, filters=%s, fetch_all=%s.",
+        "Loading lightweight sevDesk vouchers for %s contact filters with requested limit=%s, filters=%s, fetch_all=%s.",
         len(normalized_contact_ids),
         limit,
         base_filters,
@@ -749,12 +749,39 @@ def request_vouchers_with_tags_for_contacts(
 
     merged_rows.sort(key=_voucher_sort_key, reverse=True)
     limited_rows = merged_rows[: max(1, limit)]
+    logger.info(
+        "Completed lightweight sevDesk voucher load for %s contacts in %.2fs; returning %s rows.",
+        len(normalized_contact_ids),
+        perf_counter() - started_at,
+        len(limited_rows),
+    )
+    return limited_rows
+
+
+def request_vouchers_with_tags_for_contacts(
+    base_url: str,
+    token: str,
+    limit: int,
+    contact_ids: list[str],
+    *,
+    filters: dict[str, Any] | None = None,
+    fetch_all: bool = True,
+) -> list[dict[str, Any]]:
+    started_at = perf_counter()
+    limited_rows = request_vouchers_for_contacts(
+        base_url,
+        token,
+        limit,
+        contact_ids,
+        filters=filters,
+        fetch_all=fetch_all,
+    )
     detailed_rows = attach_voucher_details(base_url, token, limited_rows)
     rows_with_positions = attach_voucher_positions(base_url, token, detailed_rows)
     enriched_vouchers = attach_voucher_tags(base_url, token, rows_with_positions)
     logger.info(
         "Completed sevDesk voucher load with tags for %s contacts in %.2fs; returning %s rows.",
-        len(normalized_contact_ids),
+        len({str(contact_id).strip() for contact_id in contact_ids if str(contact_id).strip()}),
         perf_counter() - started_at,
         len(enriched_vouchers),
     )
@@ -983,6 +1010,23 @@ def request_check_account_transactions(
     if not isinstance(objects, list):
         return []
     return [item for item in objects if isinstance(item, dict)]
+
+
+def _parse_check_account_transaction_date(value: Any) -> date | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value)).date()
+    except ValueError:
+        return None
+
+
+def _check_account_transaction_date(row: dict[str, Any]) -> date | None:
+    for key in ("valueDate", "entryDate"):
+        parsed_date = _parse_check_account_transaction_date(row.get(key))
+        if parsed_date is not None:
+            return parsed_date
+    return None
 
 
 def request_check_account_transaction_by_id(
@@ -1234,6 +1278,8 @@ def fetch_all_transactions_for_check_account(
     token: str,
     check_account_id: str,
     *,
+    start_date: date | None = None,
+    end_date: date | None = None,
     page_size: int = 200,
     sort: str = "-valueDate",
 ) -> list[dict[str, Any]]:
@@ -1242,17 +1288,28 @@ def fetch_all_transactions_for_check_account(
     offset = 0
     effective_page_size = min(1000, max(1, page_size))
     wanted_account_id = str(check_account_id).strip()
+    descending_by_date = sort.startswith("-") and "Date" in sort
 
     while True:
         page = request_check_account_transactions(base_url, token, effective_page_size, offset, sort)
         if not page:
             break
 
+        oldest_page_date: date | None = None
         for item in page:
+            item_date = _check_account_transaction_date(item)
+            if item_date is not None and (
+                oldest_page_date is None or item_date < oldest_page_date
+            ):
+                oldest_page_date = item_date
             account = item.get("checkAccount")
             if not isinstance(account, dict):
                 continue
             if str(account.get("id", "")).strip() != wanted_account_id:
+                continue
+            if start_date is not None and (item_date is None or item_date < start_date):
+                continue
+            if end_date is not None and (item_date is None or item_date > end_date):
                 continue
             item_id = str(item.get("id", "")).strip()
             if item_id and item_id in seen_ids:
@@ -1263,6 +1320,9 @@ def fetch_all_transactions_for_check_account(
 
         if len(page) < effective_page_size:
             break
+        if descending_by_date and start_date is not None and oldest_page_date is not None:
+            if oldest_page_date < start_date:
+                break
         offset += len(page)
 
     return rows

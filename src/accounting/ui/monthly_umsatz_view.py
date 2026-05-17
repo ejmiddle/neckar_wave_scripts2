@@ -7,6 +7,7 @@ import pandas as pd
 import streamlit as st
 
 from src.accounting.common import base_url, ensure_token
+from src.accounting.invoice_payment_analysis import analyze_invoice_payment_csv
 from src.accounting.master_data import load_stored_accounting_types
 from src.accounting.monthly_umsatz import (
     MonthlyUmsatzFormatError,
@@ -27,6 +28,8 @@ MONTHLY_UMSATZ_FILE_SIGNATURE_STATE_KEY = "monthly_umsatz_file_signature"
 MONTHLY_UMSATZ_BELEGDATUM_STATE_KEY = "monthly_umsatz_belegdatum"
 MONTHLY_UMSATZ_UPLOAD_RESULTS_STATE_KEY = "monthly_umsatz_upload_results"
 MONTHLY_UMSATZ_INPUT_DATE_KEY = "monthly_umsatz_belegdatum_input"
+MONTHLY_UMSATZ_INVOICE_CSV_SIGNATURE_STATE_KEY = "monthly_umsatz_invoice_csv_signature"
+MONTHLY_UMSATZ_INVOICE_CSV_ANALYSIS_STATE_KEY = "monthly_umsatz_invoice_csv_analysis"
 MONTHLY_VOUCHER_KIND_ORDER = ("umsatz", "voucher_verkauft", "voucher_eingeloest")
 MONTHLY_VOUCHER_KIND_LABELS = {
     "umsatz": "Umsatz",
@@ -42,6 +45,31 @@ def _clear_state_keys(*keys: str) -> None:
 
 def _date_signature(value: date) -> str:
     return value.isoformat()
+
+
+def _format_eur(value: object) -> str:
+    formatted = f"{float(value):,.2f}"
+    return f"{formatted.replace(',', 'X').replace('.', ',').replace('X', '.')} EUR"
+
+
+def _render_correction_amount(value: object) -> None:
+    st.markdown(
+        f"""
+        <div style="
+            border-left: 4px solid #c2410c;
+            background: #fff7ed;
+            color: #7c2d12;
+            padding: 0.75rem 1rem;
+            border-radius: 6px;
+        ">
+            <div style="font-size: 0.875rem; font-weight: 600;">Korrekturbetrag</div>
+            <div style="font-size: 1.55rem; font-weight: 700; line-height: 1.35;">
+                {_format_eur(value)}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def _single_uploaded_file_signature(uploaded_file: Any | None) -> tuple[str, int] | None:
@@ -100,6 +128,132 @@ def _sync_single_upload_state(uploaded_file: Any | None) -> None:
     )
 
 
+def _sync_invoice_csv_upload_state(uploaded_file: Any | None) -> None:
+    current_signature = _single_uploaded_file_signature(uploaded_file)
+    previous_signature = st.session_state.get(MONTHLY_UMSATZ_INVOICE_CSV_SIGNATURE_STATE_KEY)
+    if current_signature == previous_signature:
+        return
+    st.session_state[MONTHLY_UMSATZ_INVOICE_CSV_SIGNATURE_STATE_KEY] = current_signature
+    _clear_state_keys(MONTHLY_UMSATZ_INVOICE_CSV_ANALYSIS_STATE_KEY)
+
+
+def _render_invoice_csv_analysis() -> None:
+    st.subheader("2. Rechnungs-CSV Zahlungsarten")
+    invoice_csv = st.file_uploader(
+        "Upload Rechnungs-CSV",
+        type=["csv"],
+        help="CSV aus der Rechnungsübersicht mit der Spalte `Zahlungsarten`.",
+        key="monthly_umsatz_invoice_csv_upload",
+    )
+    _sync_invoice_csv_upload_state(invoice_csv)
+
+    if invoice_csv is None:
+        st.info("Optional: Upload a Rechnungs-CSV to analyze payment-method totals.")
+        return
+
+    csv_col1, csv_col2 = st.columns(2)
+    with csv_col1:
+        st.metric("CSV File Name", invoice_csv.name)
+    with csv_col2:
+        st.metric("CSV File Size", f"{invoice_csv.size / 1024:.1f} KB")
+
+    if st.button("Analyze Rechnungs-CSV", type="secondary", width="stretch"):
+        try:
+            with st.spinner("Analyzing Rechnungs-CSV..."):
+                st.session_state[MONTHLY_UMSATZ_INVOICE_CSV_ANALYSIS_STATE_KEY] = (
+                    analyze_invoice_payment_csv(invoice_csv.getvalue())
+                )
+        except Exception as exc:
+            st.error(f"Could not analyze Rechnungs-CSV: {exc}")
+
+    analysis = st.session_state.get(MONTHLY_UMSATZ_INVOICE_CSV_ANALYSIS_STATE_KEY)
+    if analysis is None:
+        return
+
+    metric_col1, metric_col2, metric_col3 = st.columns(3)
+    with metric_col1:
+        st.metric("CSV Rows", analysis.row_count)
+    with metric_col2:
+        st.metric(
+            "SUMME aller Zahlungsarten",
+            _format_eur(analysis.all_payment_total),
+        )
+    with metric_col3:
+        st.metric(
+            "Negative SUMUP Stornokorrekturen",
+            _format_eur(analysis.sumup_storno_correction_total),
+        )
+
+    corrected_col1, corrected_col2, corrected_col3 = st.columns(3)
+    with corrected_col1:
+        st.metric("Barzahlung SUMME", _format_eur(analysis.cash_total))
+    with corrected_col2:
+        st.metric(
+            "Barzahlung SUMME korrigiert",
+            _format_eur(analysis.corrected_cash_total),
+        )
+    with corrected_col3:
+        st.metric(
+            "Kartenzahlung SUMME",
+            _format_eur(analysis.sumup_total),
+        )
+
+    sumup_corrected_col1, sumup_corrected_col2, sumup_corrected_col3 = st.columns(3)
+    with sumup_corrected_col1:
+        st.metric(
+            "Kartenzahlung SUMME korrigiert",
+            _format_eur(analysis.corrected_sumup_total),
+        )
+    with sumup_corrected_col2:
+        _render_correction_amount(analysis.sumup_storno_correction_total)
+    with sumup_corrected_col3:
+        st.metric(
+            "Korrekturcheck",
+            _format_eur(
+                analysis.corrected_cash_total
+                + analysis.corrected_sumup_total
+                + sum(
+                    amount
+                    for payment_name, amount in analysis.payment_totals.items()
+                    if payment_name.lower() not in {"barzahlung", "sumup"}
+                )
+            ),
+        )
+
+    st.dataframe(
+        pd.DataFrame(
+            [
+                {
+                    "Zahlungsart": payment_name,
+                    "Saldo inkl. Stornos": float(amount),
+                    "Korrigierter Saldo": float(
+                        analysis.corrected_payment_totals.get(payment_name, amount)
+                    ),
+                }
+                for payment_name, amount in analysis.payment_totals.items()
+            ]
+        ),
+        width="stretch",
+        hide_index=True,
+    )
+
+    if analysis.sumup_storno_correction_rows:
+        with st.expander("Verwendete negative SUMUP-Korrekturzeilen", expanded=True):
+            st.dataframe(
+                pd.DataFrame(analysis.sumup_storno_correction_rows),
+                width="stretch",
+                hide_index=True,
+            )
+
+    if analysis.sumup_storno_rows:
+        with st.expander("Alle SUMUP Storno-/Korrekturzeilen", expanded=False):
+            st.dataframe(
+                pd.DataFrame(analysis.sumup_storno_rows),
+                width="stretch",
+                hide_index=True,
+            )
+
+
 def _prepare_monthly_umsatz_payloads(
     *,
     belegdatum: date,
@@ -146,10 +300,14 @@ def render_monthly_umsatz_view() -> None:
         format="DD.MM.YYYY",
         key=MONTHLY_UMSATZ_INPUT_DATE_KEY,
     )
+    _render_invoice_csv_analysis()
+
+    st.subheader("3. Monthly Umsatz Excel")
     uploaded_file = st.file_uploader(
         "Upload monthly Umsatz Excel",
         type=["xlsx", "xls"],
         help="The workbook must contain `ALT` and `WIE` in the same validated layout.",
+        key="monthly_umsatz_excel_upload",
     )
     _sync_single_upload_state(uploaded_file)
 
@@ -196,7 +354,7 @@ def render_monthly_umsatz_view() -> None:
     if not isinstance(upload_results, dict):
         upload_results = {}
 
-    st.subheader("2. Review")
+    st.subheader("4. Review")
     with st.popover("Show extracted Umsatz JSON"):
         st.json(extracted_payload, expanded=True)
 

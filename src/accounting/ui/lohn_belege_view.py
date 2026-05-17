@@ -43,6 +43,7 @@ LOHN_BELEGE_LOHNKOSTEN_FILE_SIGNATURE_STATE_KEY = "lohn_belege_lohnkosten_file_s
 LOHN_BELEGE_U1_BELEGDATUM_STATE_KEY = "lohn_belege_u1_belegdatum"
 LOHN_BELEGE_LOHNKOSTEN_BELEGDATUM_STATE_KEY = "lohn_belege_lohnkosten_belegdatum"
 LOHN_BELEGE_MODEL_NAME = "gpt-4o"
+LOHN_BELEGE_U1_PAYLOAD_VERSION = "u1-credit-debit-revenue-v2"
 
 
 def _clear_state_keys(*keys: str) -> None:
@@ -52,6 +53,11 @@ def _clear_state_keys(*keys: str) -> None:
 
 def _date_signature(value: date) -> str:
     return value.isoformat()
+
+
+def _payload_signature(value: date, *, version: str | None = None) -> str:
+    date_part = _date_signature(value)
+    return f"{date_part}:{version}" if version else date_part
 
 
 def _uploaded_files_signature(uploaded_files: list[Any] | None) -> tuple[tuple[str, int], ...] | None:
@@ -114,12 +120,13 @@ def _prepare_lohn_belege_payloads(
     belegdatum_key: str,
     belegdatum: date,
     builder: Any,
+    payload_version: str | None = None,
 ) -> list[dict[str, Any]] | None:
     results = st.session_state.get(results_key)
     if not isinstance(results, list):
         return None
 
-    current_date_signature = _date_signature(belegdatum)
+    current_date_signature = _payload_signature(belegdatum, version=payload_version)
     payloads = st.session_state.get(payloads_key)
     stored_date_signature = st.session_state.get(belegdatum_key)
     if isinstance(payloads, list) and stored_date_signature == current_date_signature:
@@ -145,7 +152,10 @@ def _build_u1_voucher_payloads(
         accounting_type_rows=_load_accounting_type_rows(),
     )
     st.session_state[LOHN_BELEGE_U1_VOUCHER_PAYLOADS_KEY] = payloads
-    st.session_state[LOHN_BELEGE_U1_BELEGDATUM_STATE_KEY] = _date_signature(belegdatum)
+    st.session_state[LOHN_BELEGE_U1_BELEGDATUM_STATE_KEY] = _payload_signature(
+        belegdatum,
+        version=LOHN_BELEGE_U1_PAYLOAD_VERSION,
+    )
     return payloads
 
 
@@ -490,6 +500,7 @@ def _render_u1_section() -> None:
         belegdatum_key=LOHN_BELEGE_U1_BELEGDATUM_STATE_KEY,
         belegdatum=st.session_state[LOHN_BELEGE_DATE_KEY],
         builder=build_u1_voucher_payloads,
+        payload_version=LOHN_BELEGE_U1_PAYLOAD_VERSION,
     )
     if isinstance(payloads, list):
         _render_prepared_voucher_payloads(

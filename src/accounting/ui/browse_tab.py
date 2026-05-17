@@ -22,11 +22,15 @@ from src.accounting.ui.filter_utils import (
 )
 from src.logging_config import logger
 from src.sevdesk.api import (
+    attach_voucher_details,
+    attach_voucher_positions,
+    attach_voucher_tags,
     download_voucher_document,
     fetch_latest_transactions_for_check_account,
     request_contacts,
+    request_vouchers,
+    request_vouchers_for_contacts,
     request_vouchers_with_tags,
-    request_vouchers_with_tags_for_contacts,
 )
 from src.sevdesk.booking import (
     book_voucher_to_check_account,
@@ -57,6 +61,7 @@ LATEST_BELEGE_HAS_DOCUMENT_KEY = "sevdesk_latest_belege_has_document"
 LATEST_BELEGE_CONTACT_QUERY_KEY = "sevdesk_latest_belege_contact_query"
 LATEST_BELEGE_CONTACT_MATCHES_KEY = "sevdesk_latest_belege_contact_matches"
 LATEST_BELEGE_TEXT_QUERY_KEY = "sevdesk_latest_belege_text_query"
+LATEST_BELEGE_LOAD_MODE_KEY = "sevdesk_latest_belege_load_mode"
 MAX_SERVER_SIDE_CONTACT_MATCHES = 20
 
 API_STATUS_OPTION_LABELS = {
@@ -69,6 +74,11 @@ HAS_DOCUMENT_OPTION_LABELS = {
     "": "Mit oder ohne Dokument",
     "1": "Nur mit Dokument",
     "0": "Nur ohne Dokument",
+}
+VOUCHER_LOAD_MODE_LABELS = {
+    "fast": "Schnell: Basisdaten",
+    "tags": "Mit Tags",
+    "full": "Vollständig: Details, Positionen, Tags",
 }
 
 
@@ -147,6 +157,9 @@ def _voucher_status_value(row: dict) -> str:
 
 
 def _build_tag_filter_options(rows: list[dict]) -> list[str]:
+    if not any("tags" in row or "tag" in row or "voucherTags" in row for row in rows):
+        return []
+
     tags = sorted(
         {
             tag_name
@@ -159,6 +172,67 @@ def _build_tag_filter_options(rows: list[dict]) -> list[str]:
     if has_untagged_rows:
         return [*tags, NO_TAGS_FILTER_LABEL]
     return tags
+
+
+def _latest_belege_enrichment_state(rows: list[dict]) -> dict[str, int]:
+    return {
+        "details": sum("supplier" in row or "sumGross" in row or "document" in row for row in rows),
+        "positions": sum(isinstance(row.get("voucherPos") or row.get("voucherPosSave"), list) for row in rows),
+        "tags": sum("tags" in row or "tag" in row or "voucherTags" in row for row in rows),
+    }
+
+
+def _render_latest_belege_enrichment_controls(rows: list[dict]) -> None:
+    if not rows:
+        return
+
+    enrichment_state = _latest_belege_enrichment_state(rows)
+    row_count = len(rows)
+    with st.expander("Daten für Downstream-Aufgaben erweitern", expanded=False):
+        st.caption(
+            "Basisdaten sind schnell und reichen für Liste, Suche, Status, Lieferant/Kunde und PDF-Download. "
+            "Tags werden für den Tag-Filter benötigt. Details liefern den vollständigen Voucher-Payload. "
+            "Buchungspositionen werden für Buchungskonto-Auswertungen und Umbuchungen benötigt."
+        )
+        st.caption(
+            "Aktueller Stand: "
+            f"Details {enrichment_state['details']}/{row_count}, "
+            f"Buchungspositionen {enrichment_state['positions']}/{row_count}, "
+            f"Tags {enrichment_state['tags']}/{row_count}."
+        )
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            load_tags = st.button("Tags nachladen", width="stretch")
+        with col2:
+            load_details = st.button("Details nachladen", width="stretch")
+        with col3:
+            load_positions = st.button("Positionen nachladen", width="stretch")
+        with col4:
+            load_full = st.button("Alles nachladen", width="stretch")
+
+        if not any((load_tags, load_details, load_positions, load_full)):
+            return
+
+        token = ensure_token()
+        if not token:
+            return
+
+        try:
+            with st.spinner("Belege werden fuer Downstream-Aufgaben erweitert..."):
+                _enrich_latest_belege_session_rows(
+                    token,
+                    details=load_details or load_full,
+                    positions=load_positions or load_full,
+                    tags=load_tags or load_full,
+                )
+            st.success("Geladene Belege wurden erweitert.")
+            st.rerun()
+        except Exception as exc:
+            report_error(
+                f"Failed to enrich Belege: {exc}",
+                log_message="Failed to enrich loaded vouchers",
+                exc_info=True,
+            )
 
 
 def _row_matches_tag_filter(row: dict, selected_tags: set[str]) -> bool:
@@ -256,6 +330,133 @@ def _build_voucher_request_filters() -> dict[str, object]:
         filters["hasDocument"] = has_document
 
     return filters
+
+
+def _load_vouchers_for_current_filters(
+    *,
+    token: str,
+    limit: int,
+    filters: dict[str, object],
+    contact_query: str,
+    load_mode: str,
+) -> list[dict]:
+    contact_ids: list[str] | None = None
+    if contact_query:
+        matched_contacts = _find_contacts_for_server_side_filter(token, contact_query)
+        st.session_state[LATEST_BELEGE_CONTACT_MATCHES_KEY] = [
+            _contact_display_name(row) for row in matched_contacts
+        ]
+        if not matched_contacts:
+            return []
+        contact_ids = [str(row.get("id", "")).strip() for row in matched_contacts]
+    else:
+        st.session_state.pop(LATEST_BELEGE_CONTACT_MATCHES_KEY, None)
+
+    if load_mode == "full":
+        if contact_ids is not None:
+            rows = request_vouchers_for_contacts(
+                base_url(),
+                token,
+                limit,
+                contact_ids,
+                filters=filters,
+                fetch_all=False,
+            )
+            return _enrich_voucher_rows(rows, token, details=True, positions=True, tags=True)
+        return request_vouchers_with_tags(
+            base_url(),
+            token,
+            limit,
+            filters=filters,
+            fetch_all=False,
+        )
+
+    if contact_ids is not None:
+        rows = request_vouchers_for_contacts(
+            base_url(),
+            token,
+            limit,
+            contact_ids,
+            filters=filters,
+            fetch_all=False,
+        )
+    else:
+        rows = request_vouchers(
+            base_url(),
+            token,
+            limit,
+            filters=filters,
+            fetch_all=False,
+        )
+
+    if load_mode == "tags":
+        rows = _enrich_voucher_rows(rows, token, tags=True)
+    return rows
+
+
+def _enrich_voucher_rows(
+    rows: list[dict],
+    token: str,
+    *,
+    details: bool = False,
+    positions: bool = False,
+    tags: bool = False,
+) -> list[dict]:
+    enriched_rows = rows
+    if details:
+        enriched_rows = attach_voucher_details(base_url(), token, enriched_rows)
+    if positions:
+        enriched_rows = attach_voucher_positions(base_url(), token, enriched_rows)
+    if tags:
+        enriched_rows = attach_voucher_tags(base_url(), token, enriched_rows)
+    return enriched_rows
+
+
+def _rows_missing_positions(rows: list[dict]) -> list[dict]:
+    return [
+        row
+        for row in rows
+        if str(row.get("id", "")).strip()
+        and not isinstance(row.get("voucherPos") or row.get("voucherPosSave"), list)
+    ]
+
+
+def _replace_rows_by_id(existing_rows: list[dict], updated_rows: list[dict]) -> list[dict]:
+    updated_by_id = {
+        str(row.get("id", "")).strip(): row
+        for row in updated_rows
+        if isinstance(row, dict) and str(row.get("id", "")).strip()
+    }
+    if not updated_by_id:
+        return existing_rows
+    return [
+        updated_by_id.get(str(row.get("id", "")).strip(), row)
+        for row in existing_rows
+    ]
+
+
+def _enrich_latest_belege_session_rows(
+    token: str,
+    *,
+    details: bool = False,
+    positions: bool = False,
+    tags: bool = False,
+    rows_to_enrich: list[dict] | None = None,
+) -> list[dict]:
+    existing_rows = st.session_state.get(LATEST_BELEGE_ROWS_KEY) or []
+    if not isinstance(existing_rows, list) or not existing_rows:
+        return []
+
+    target_rows = rows_to_enrich if rows_to_enrich is not None else existing_rows
+    enriched_rows = _enrich_voucher_rows(
+        target_rows,
+        token,
+        details=details,
+        positions=positions,
+        tags=tags,
+    )
+    st.session_state[LATEST_BELEGE_ROWS_KEY] = _replace_rows_by_id(existing_rows, enriched_rows)
+    return enriched_rows
 
 
 def _merge_updated_vouchers_into_session(updated_vouchers: list[dict]) -> None:
@@ -535,6 +736,15 @@ def _render_latest_belege_umbuchen_section(
     else:
         st.caption("Select one or more Belege in the table above.")
 
+    accounting_types_for_selection = st.session_state.get("sevdesk_accounting_types_rows")
+    if accounting_types_for_selection is None:
+        accounting_types_for_selection = load_stored_accounting_types()
+    accounting_type_lookup = {
+        str(row.get("id", "")).strip(): row
+        for row in (accounting_types_for_selection or [])
+        if str(row.get("id", "")).strip()
+    }
+
     download_payload = st.session_state.get(LATEST_BELEGE_DOWNLOAD_PAYLOAD_KEY)
     if (
         not isinstance(download_payload, dict)
@@ -669,8 +879,31 @@ def _render_latest_belege_umbuchen_section(
         width="stretch",
         disabled=not selected_rows,
     ):
-        st.session_state[LATEST_BELEGE_POSITION_SOURCE_IDS_KEY] = current_selection_ids
-        st.session_state[LATEST_BELEGE_SELECTED_POSITION_IDS_KEY] = []
+        token = ensure_token()
+        if token:
+            try:
+                missing_position_rows = _rows_missing_positions(selected_rows)
+                if missing_position_rows:
+                    with st.spinner("Buchungspositionen werden aus sevDesk nachgeladen..."):
+                        _enrich_latest_belege_session_rows(
+                            token,
+                            positions=True,
+                            rows_to_enrich=missing_position_rows,
+                        )
+                    current_rows = st.session_state.get(LATEST_BELEGE_ROWS_KEY) or current_rows
+                    selected_rows = [
+                        row
+                        for row in current_rows
+                        if str(row.get("id", "")).strip() in selected_voucher_id_set
+                    ]
+                st.session_state[LATEST_BELEGE_POSITION_SOURCE_IDS_KEY] = current_selection_ids
+                st.session_state[LATEST_BELEGE_SELECTED_POSITION_IDS_KEY] = []
+            except Exception as exc:
+                report_error(
+                    f"Failed to load Buchungspositionen: {exc}",
+                    log_message="Failed to load voucher positions",
+                    exc_info=True,
+                )
 
     show_positions = (
         bool(current_selection_ids)
@@ -704,14 +937,6 @@ def _render_latest_belege_umbuchen_section(
         else:
             st.caption("Select one or more Buchungspositionen in the table above.")
 
-    accounting_types_for_selection = st.session_state.get("sevdesk_accounting_types_rows")
-    if accounting_types_for_selection is None:
-        accounting_types_for_selection = load_stored_accounting_types()
-    accounting_type_lookup = {
-        str(row.get("id", "")).strip(): row
-        for row in (accounting_types_for_selection or [])
-        if str(row.get("id", "")).strip()
-    }
     active_accounting_types = _active_accounting_type_rows(accounting_types_for_selection or [])
     if not active_accounting_types:
         st.info(
@@ -883,6 +1108,16 @@ def render_latest_belege_section() -> None:
                 format_func=lambda option: HAS_DOCUMENT_OPTION_LABELS.get(option, option),
                 key=LATEST_BELEGE_HAS_DOCUMENT_KEY,
             )
+            st.selectbox(
+                "Datenumfang",
+                options=list(VOUCHER_LOAD_MODE_LABELS.keys()),
+                format_func=lambda option: VOUCHER_LOAD_MODE_LABELS.get(option, option),
+                key=LATEST_BELEGE_LOAD_MODE_KEY,
+                help=(
+                    "Schnell lädt nur die Voucher-Liste. Tags lädt zusätzlich Tag-Filterdaten. "
+                    "Vollständig lädt Details, Buchungspositionen und Tags wie der bisherige Ablauf."
+                ),
+            )
         latest_submit = st.form_submit_button("Belege laden", width="stretch")
 
     if latest_submit:
@@ -901,40 +1136,22 @@ def render_latest_belege_section() -> None:
 
                 request_filters = _build_voucher_request_filters()
                 contact_query = str(st.session_state.get(LATEST_BELEGE_CONTACT_QUERY_KEY, "")).strip()
+                load_mode = str(st.session_state.get(LATEST_BELEGE_LOAD_MODE_KEY, "fast")).strip()
                 logger.info(
-                    "Triggered 'Belege laden' from Streamlit UI with limit=%s, filters=%s, contact_query=%r.",
+                    "Triggered 'Belege laden' from Streamlit UI with limit=%s, filters=%s, contact_query=%r, load_mode=%s.",
                     int(latest_limit),
                     request_filters,
                     contact_query,
+                    load_mode,
                 )
                 with st.spinner("Belege werden aus sevDesk geladen..."):
-                    if contact_query:
-                        matched_contacts = _find_contacts_for_server_side_filter(token, contact_query)
-                        st.session_state[LATEST_BELEGE_CONTACT_MATCHES_KEY] = [
-                            _contact_display_name(row) for row in matched_contacts
-                        ]
-                        if matched_contacts:
-                            st.session_state[LATEST_BELEGE_ROWS_KEY] = (
-                                request_vouchers_with_tags_for_contacts(
-                                    base_url(),
-                                    token,
-                                    int(latest_limit),
-                                    [str(row.get("id", "")).strip() for row in matched_contacts],
-                                    filters=request_filters,
-                                    fetch_all=False,
-                                )
-                            )
-                        else:
-                            st.session_state[LATEST_BELEGE_ROWS_KEY] = []
-                    else:
-                        st.session_state.pop(LATEST_BELEGE_CONTACT_MATCHES_KEY, None)
-                        st.session_state[LATEST_BELEGE_ROWS_KEY] = request_vouchers_with_tags(
-                            base_url(),
-                            token,
-                            int(latest_limit),
-                            filters=request_filters,
-                            fetch_all=False,
-                        )
+                    st.session_state[LATEST_BELEGE_ROWS_KEY] = _load_vouchers_for_current_filters(
+                        token=token,
+                        limit=int(latest_limit),
+                        filters=request_filters,
+                        contact_query=contact_query,
+                        load_mode=load_mode,
+                    )
                 st.session_state[LATEST_BELEGE_SELECTED_IDS_KEY] = []
                 st.session_state.pop(LATEST_BELEGE_SELECTION_TABLE_KEY, None)
                 st.session_state.pop(LATEST_BELEGE_UMBUCHEN_RESULTS_KEY, None)
@@ -966,6 +1183,8 @@ def render_latest_belege_section() -> None:
             st.caption(
                 f"Server-side Lieferant/Kunde filter `{contact_query}` did not match any sevDesk contacts."
             )
+
+    _render_latest_belege_enrichment_controls(rows)
 
     status_options = build_status_filter_options(
         rows,

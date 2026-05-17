@@ -11,6 +11,8 @@ from src.logging_config import logger
 from src.sevdesk.api import fetch_all_contacts, read_token
 from src.sevdesk.voucher import first_object_from_response, write_json
 
+SEVDESK_SUPPLIER_CATEGORY_ID = 2
+
 
 def extract_contact_category_name(row: dict[str, Any]) -> str:
     category = row.get("category")
@@ -240,7 +242,7 @@ def build_customer_create_payload(
         "customerNumber": build_customer_number(seller_name, seller_vat_id, customer_rows),
         "vatNumber": seller_vat_id.strip(),
         "category": {
-            "id": 3,
+            "id": SEVDESK_SUPPLIER_CATEGORY_ID,
             "objectName": "Category",
         },
         "description": "Automatically created from Amazon receipt extraction in the accounting app",

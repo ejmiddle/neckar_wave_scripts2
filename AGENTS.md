@@ -24,6 +24,15 @@ uv run python -m unittest test_sevdesk_browse.py
 uv run streamlit run pages/Accounting.py
 ```
 
+## Deployment strategy
+
+- Both Streamlit apps use the same pattern: build to GHCR, sync selected secrets from `config/secrets/production.enc.env`, then redeploy the Mittwald service.
+- Main app tasks: `task main_docker_publish`, `task main_mittwald_sync_secrets`, `task main_mittwald_deploy`.
+- Accounting app tasks: `task acc_docker_publish`, `task acc_mittwald_sync_secrets`, `task acc_mittwald_deploy`.
+- The main app defaults to Mittwald service `testcontainer` and can be overridden with `MAIN_MITTWALD_SERVICE`.
+- The main app requires `SHOPIFY_KEY` in the deployed Mittwald service environment for Shopify access.
+- Detailed deployment and secret-management instructions live in `deployment-secrets.md`.
+
 ## Repo layout
 
 - `src/accounting/` contains the business logic for invoices, vouchers, Amazon workflows, payments, and master data.
