@@ -7,6 +7,7 @@ from .api import book_voucher, create_voucher, request_voucher_by_id, request_vo
 from .voucher import (
     build_voucher_accounting_type_update_payload,
     build_voucher_accounting_type_update_payload_for_positions,
+    build_voucher_field_update_payload,
     extract_voucher_accounting_type_ids,
     first_object_from_response,
 )
@@ -401,6 +402,170 @@ def update_voucher_accounting_type_for_positions(
         "before_position_accounting_type_ids": before_position_accounting_type_ids,
         "after_position_accounting_type_ids": after_position_accounting_type_ids,
         "target_accounting_type_id": target_accounting_type_id,
+        "change_status": "success",
+        "booking_payload": booking_payload,
+        "response_payload": response_payload,
+        "response_object": first_object_from_response(response_payload),
+        "updated_voucher": updated,
+    }
+
+
+def update_voucher_fields(
+    base_url: str,
+    token: str,
+    voucher_id: str,
+    *,
+    voucher_date: str | None = None,
+    delivery_date: str | None = None,
+    description: str | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    target_voucher_id = str(voucher_id).strip()
+    if not target_voucher_id:
+        raise RuntimeError("Target Beleg id is missing.")
+
+    target_voucher_date = str(voucher_date).strip() if voucher_date is not None else None
+    target_delivery_date = str(delivery_date).strip() if delivery_date is not None else None
+    target_description = str(description).strip() if description is not None else None
+    if target_voucher_date is None and target_delivery_date is None and target_description is None:
+        raise RuntimeError("No voucher fields were provided for update.")
+
+    existing = request_voucher_by_id(base_url, token, target_voucher_id)
+    if existing is None:
+        raise RuntimeError(
+            f"Safety check failed: target Beleg id={target_voucher_id} not found before update."
+        )
+
+    existing_positions = request_voucher_positions(
+        base_url,
+        token,
+        filters={
+            "voucher[id]": target_voucher_id,
+            "voucher[objectName]": "Voucher",
+            "depth": "1",
+        },
+    )
+    existing = {**existing, "voucherPos": existing_positions}
+
+    before_update = str(existing.get("update", "")).strip()
+    before_voucher_date = str(existing.get("voucherDate", "")).strip()
+    before_delivery_date = str(existing.get("deliveryDate", "")).strip()
+    before_description = str(existing.get("description", "")).strip()
+
+    voucher_date_unchanged = (
+        target_voucher_date is None
+        or _parse_booking_date(before_voucher_date) == _parse_booking_date(target_voucher_date)
+    )
+    delivery_date_unchanged = (
+        target_delivery_date is None
+        or _parse_booking_date(before_delivery_date) == _parse_booking_date(target_delivery_date)
+    )
+    description_unchanged = (
+        target_description is None
+        or before_description == target_description
+    )
+    if voucher_date_unchanged and delivery_date_unchanged and description_unchanged:
+        return {
+            "voucher_id": target_voucher_id,
+            "before_update": before_update,
+            "after_update": before_update,
+            "before_voucher_date": before_voucher_date,
+            "after_voucher_date": before_voucher_date,
+            "before_delivery_date": before_delivery_date,
+            "after_delivery_date": before_delivery_date,
+            "before_description": before_description,
+            "after_description": before_description,
+            "change_status": "skipped",
+            "booking_payload": None,
+            "response_payload": None,
+            "response_object": None,
+            "updated_voucher": existing,
+        }
+
+    booking_payload = build_voucher_field_update_payload(
+        existing,
+        voucher_date=target_voucher_date,
+        delivery_date=target_delivery_date,
+        description=target_description,
+    )
+    if dry_run:
+        return {
+            "voucher_id": target_voucher_id,
+            "before_update": before_update,
+            "after_update": before_update,
+            "before_voucher_date": before_voucher_date,
+            "after_voucher_date": before_voucher_date,
+            "before_delivery_date": before_delivery_date,
+            "after_delivery_date": before_delivery_date,
+            "before_description": before_description,
+            "after_description": before_description,
+            "change_status": "dry_run",
+            "booking_payload": booking_payload,
+            "response_payload": None,
+            "response_object": None,
+            "updated_voucher": existing,
+        }
+
+    response_payload = create_voucher(base_url, token, booking_payload)
+
+    updated = request_voucher_by_id(base_url, token, target_voucher_id)
+    if updated is None:
+        raise RuntimeError(
+            f"Post-update verification failed: could not load Beleg id={target_voucher_id}."
+        )
+    updated_positions = request_voucher_positions(
+        base_url,
+        token,
+        filters={
+            "voucher[id]": target_voucher_id,
+            "voucher[objectName]": "Voucher",
+            "depth": "1",
+        },
+    )
+    updated = {**updated, "voucherPos": updated_positions}
+
+    after_update = str(updated.get("update", "")).strip()
+    after_voucher_date = str(updated.get("voucherDate", "")).strip()
+    after_delivery_date = str(updated.get("deliveryDate", "")).strip()
+    after_description = str(updated.get("description", "")).strip()
+
+    if (
+        target_voucher_date is not None
+        and _parse_booking_date(after_voucher_date) != _parse_booking_date(target_voucher_date)
+    ):
+        raise RuntimeError(
+            "Post-update verification failed: voucherDate did not match the selected target "
+            f"(expected {target_voucher_date!r}, got {after_voucher_date!r})."
+        )
+    if (
+        target_delivery_date is not None
+        and _parse_booking_date(after_delivery_date) != _parse_booking_date(target_delivery_date)
+    ):
+        raise RuntimeError(
+            "Post-update verification failed: deliveryDate did not match the selected target "
+            f"(expected {target_delivery_date!r}, got {after_delivery_date!r})."
+        )
+    if target_description is not None and after_description != target_description:
+        raise RuntimeError(
+            "Post-update verification failed: description did not match the selected target "
+            f"(expected {target_description!r}, got {after_description!r})."
+        )
+    if before_update and after_update and before_update == after_update:
+        raise RuntimeError(
+            "Post-update verification failed: voucher update timestamp did not change "
+            f"(still {after_update})."
+        )
+
+    return {
+        "voucher_id": target_voucher_id,
+        "before_update": before_update,
+        "after_update": after_update,
+        "before_voucher_date": before_voucher_date,
+        "after_voucher_date": after_voucher_date,
+        "before_delivery_date": before_delivery_date,
+        "after_delivery_date": after_delivery_date,
+        "before_description": before_description,
+        "after_description": after_description,
         "change_status": "success",
         "booking_payload": booking_payload,
         "response_payload": response_payload,

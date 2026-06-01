@@ -1,0 +1,3 @@
+from src.accounting.page import render_accounting_ready2order_sales_page
+
+render_accounting_ready2order_sales_page()

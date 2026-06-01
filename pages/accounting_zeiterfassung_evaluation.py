@@ -1,0 +1,4 @@
+from src.accounting.page import render_accounting_zeiterfassung_evaluation_page
+
+
+render_accounting_zeiterfassung_evaluation_page()

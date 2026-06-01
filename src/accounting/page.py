@@ -94,6 +94,20 @@ def render_accounting_payments_page() -> None:
     render_payments_section()
 
 
+def render_accounting_finom_open_payments_page() -> None:
+    from src.accounting.ui.finom_open_payments_view import render_finom_open_payments_view
+
+    load_env_fallback()
+    render_finom_open_payments_view()
+
+
+def render_accounting_upload_archive_page() -> None:
+    from src.accounting.ui.upload_archive_view import render_upload_archive_view
+
+    load_env_fallback()
+    render_upload_archive_view()
+
+
 def render_accounting_monthly_umsatz_page() -> None:
     from src.accounting.ui.monthly_umsatz_view import render_monthly_umsatz_view
 
@@ -101,8 +115,29 @@ def render_accounting_monthly_umsatz_page() -> None:
     render_monthly_umsatz_view()
 
 
+def render_accounting_ready2order_sales_page() -> None:
+    from src.accounting.ui.ready2order_sales_view import render_ready2order_sales_view
+
+    load_env_fallback()
+    render_ready2order_sales_view()
+
+
+def render_accounting_to_go_ust_korrektur_page() -> None:
+    from src.accounting.ui.to_go_ust_korrektur_view import render_to_go_ust_korrektur_view
+
+    load_env_fallback()
+    render_to_go_ust_korrektur_view()
+
+
 def render_accounting_lohn_belege_page() -> None:
     from src.accounting.ui.lohn_belege_view import render_lohn_belege_view
 
     load_env_fallback()
     render_lohn_belege_view()
+
+
+def render_accounting_zeiterfassung_evaluation_page() -> None:
+    from src.accounting.ui.zeiterfassung_evaluation_view import render_zeiterfassung_evaluation_view
+
+    load_env_fallback()
+    render_zeiterfassung_evaluation_view()

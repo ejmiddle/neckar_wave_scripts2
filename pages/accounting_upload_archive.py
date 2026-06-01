@@ -1,0 +1,4 @@
+from src.accounting.page import render_accounting_upload_archive_page
+
+
+render_accounting_upload_archive_page()

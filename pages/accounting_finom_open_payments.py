@@ -1,0 +1,4 @@
+from src.accounting.page import render_accounting_finom_open_payments_page
+
+
+render_accounting_finom_open_payments_page()

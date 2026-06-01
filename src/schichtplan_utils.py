@@ -2,23 +2,122 @@ import difflib
 import re
 from datetime import datetime, time, timedelta
 from pathlib import Path
+from typing import Any
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+BERLIN_TIMEZONE = ZoneInfo("Europe/Berlin")
 NAME_COLUMN_CANDIDATES = ("Name", "Mitarbeiter", "Employee", "Person", "Titel")
-SPAN_COLUMN_CANDIDATES = ("Wann?", "Wann", "Date", "Zeitraum", "Zeitspanne")
+AVAILABILITY_COLUMNS = ("Wann", "Kommentar", "Select", "Name")
+FIXED_SCHEDULE_NAME_COLUMNS = NAME_COLUMN_CANDIDATES
+FIXED_SCHEDULE_DAYS_COLUMNS = (
+    "Days",
+    "days",
+    "Wochentage",
+    "Wochentag",
+    "Tage",
+    "Tag",
+    "Weekdays",
+    "Weekday",
+)
+FIXED_SCHEDULE_START_COLUMNS = (
+    "Start Time",
+    "start_time",
+    "Start",
+    "Beginn",
+    "Von",
+    "Startzeit",
+)
+FIXED_SCHEDULE_END_COLUMNS = (
+    "End Time",
+    "end_time",
+    "End",
+    "Ende",
+    "Bis",
+    "Endzeit",
+)
+FIXED_SCHEDULE_SPAN_COLUMNS = (
+    "Wann",
+    "Date",
+    "Datum",
+    "Zeit",
+    "Time",
+    "Schicht",
+)
+GERMAN_WEEKDAYS = {
+    "montag": "Monday",
+    "mo": "Monday",
+    "dienstag": "Tuesday",
+    "di": "Tuesday",
+    "mittwoch": "Wednesday",
+    "mi": "Wednesday",
+    "donnerstag": "Thursday",
+    "do": "Thursday",
+    "freitag": "Friday",
+    "fr": "Friday",
+    "samstag": "Saturday",
+    "sa": "Saturday",
+    "sonntag": "Sunday",
+    "so": "Sunday",
+}
+ENGLISH_WEEKDAYS = {
+    "monday": "Monday",
+    "mon": "Monday",
+    "tuesday": "Tuesday",
+    "tue": "Tuesday",
+    "wednesday": "Wednesday",
+    "wed": "Wednesday",
+    "thursday": "Thursday",
+    "thu": "Thursday",
+    "friday": "Friday",
+    "fri": "Friday",
+    "saturday": "Saturday",
+    "sat": "Saturday",
+    "sunday": "Sunday",
+    "sun": "Sunday",
+}
+
+
+def _parse_datetime_text(value: object):
+    missing = pd.isna(value)
+    if isinstance(missing, bool) and missing:
+        return pd.NaT
+    text = str(value).strip()
+    if not text:
+        return pd.NaT
+    dayfirst = not bool(re.match(r"^\d{4}[-/]\d{1,2}[-/]\d{1,2}", text))
+    parsed = pd.to_datetime(text, dayfirst=dayfirst, errors="coerce")
+    if pd.notna(parsed) and getattr(parsed, "tzinfo", None) is not None:
+        parsed = parsed.tz_convert(BERLIN_TIMEZONE).tz_localize(None)
+    return parsed
+
+
+def _parse_notion_date_value(value: dict) -> tuple[object, object]:
+    start = _parse_datetime_text(value.get("start"))
+    end_raw = value.get("end")
+    end = _parse_datetime_text(end_raw)
+
+    if pd.notna(end) and isinstance(end_raw, str) and "T" not in end_raw:
+        end = datetime.combine(end.date(), time(23, 59, 59))
+    if pd.isna(end) and pd.notna(start) and isinstance(value.get("start"), str) and "T" not in value["start"]:
+        end = datetime.combine(start.date(), time(23, 59, 59))
+
+    return start, end
+
 
 def parse_wann(wann_str):
+    if isinstance(wann_str, dict) and wann_str.get("start"):
+        return _parse_notion_date_value(wann_str)
     if pd.isna(wann_str):
         return pd.NaT, pd.NaT
     wann_str = str(wann_str)
-    parts = wann_str.split("→")
+    parts = re.split(r"\s*(?:→|->|–)\s*", wann_str, maxsplit=1)
     start = parts[0].strip()
     end = parts[1].strip() if len(parts) > 1 else None
     try:
         start = re.sub(r'\s*\(GMT[^\)]*\)', '', start)
-        # Handle European date format (DD/MM/YYYY) with dayfirst=True
-        start_time = pd.to_datetime(start, dayfirst=True)
+        start_time = _parse_datetime_text(start)
     except Exception:
         start_time = pd.NaT
     end_time = pd.NaT
@@ -31,18 +130,36 @@ def parse_wann(wann_str):
             end = re.sub(r'\s*\(GMT[^\)]*\)', '', end)
             if re.match(r"^[A-Za-z]+\s+\d{1,2},\s+\d{4}$", end.strip()):
                 try:
-                    date_only = pd.to_datetime(end.strip(), dayfirst=True).date()
+                    date_only = _parse_datetime_text(end.strip()).date()
                     end = datetime.combine(date_only, time(23, 59, 59))
                 except Exception:
                     end = pd.NaT
         try:
             if not isinstance(end, datetime):
-                end_time = pd.to_datetime(end, dayfirst=True)
+                end_time = _parse_datetime_text(end)
             else:
                 end_time = end
         except Exception:
             end_time = pd.NaT
     return start_time, end_time
+
+
+def has_explicit_time_frame(value: Any) -> bool:
+    if isinstance(value, dict):
+        for key in ("start", "end"):
+            raw = value.get(key)
+            if isinstance(raw, str) and "T" in raw:
+                return True
+        return False
+
+    if pd.isna(value):
+        return False
+    text = str(value).strip()
+    if not text:
+        return False
+    cleaned = re.sub(r'\s*\(GMT[^\)]*\)', '', text)
+    return bool(re.search(r"\b\d{1,2}[:.]\d{2}\b", cleaned) or re.search(r"T\d{1,2}:\d{2}", cleaned))
+
 
 def split_multiday_entries(df):
     split_rows = []
@@ -83,6 +200,146 @@ def match_name(name, name_list):
     match = difflib.get_close_matches(name, name_list, n=1, cutoff=0.6)
     return match[0] if match else None
 
+
+def _first_non_empty(row: dict[str, Any], candidates: tuple[str, ...]) -> Any:
+    for candidate in candidates:
+        value = row.get(candidate)
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        if isinstance(value, list) and not value:
+            continue
+        return value
+    return None
+
+
+def _normalize_weekday(value: Any) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    key = text.casefold().rstrip(".")
+    return ENGLISH_WEEKDAYS.get(key) or GERMAN_WEEKDAYS.get(key)
+
+
+def _normalize_weekdays(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        raw_days = value
+    else:
+        raw_days = re.split(r"\s*[,;/|]\s*|\s+(?:und|and)\s+", str(value), flags=re.IGNORECASE)
+
+    days = []
+    for raw_day in raw_days:
+        normalized = _normalize_weekday(raw_day)
+        if normalized and normalized not in days:
+            days.append(normalized)
+    return days
+
+
+def _parse_fixed_schedule_time(value: Any) -> time | None:
+    if value is None:
+        return None
+    if isinstance(value, time):
+        return value.replace(second=0, microsecond=0)
+    if isinstance(value, datetime):
+        return value.time().replace(second=0, microsecond=0)
+
+    text = str(value).strip()
+    if not text:
+        return None
+
+    time_match = re.search(r"(\d{1,2})(?::|\.)(\d{2})", text)
+    if time_match:
+        hour = int(time_match.group(1))
+        minute = int(time_match.group(2))
+        if 0 <= hour <= 23 and 0 <= minute <= 59:
+            return time(hour, minute)
+
+    hour_match = re.fullmatch(r"(\d{1,2})", text)
+    if hour_match:
+        hour = int(hour_match.group(1))
+        if 0 <= hour <= 23:
+            return time(hour, 0)
+
+    parsed = _parse_datetime_text(text)
+    if pd.notna(parsed):
+        return parsed.time().replace(second=0, microsecond=0)
+    return None
+
+
+def normalize_fixed_schedule_records(records: list[dict[str, Any]]) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    """Convert flat Notion rows into the existing fixed schedule dict format."""
+    schedules: dict[str, dict[str, Any]] = {}
+    errors = []
+    calendar_weeks: set[tuple[int, int]] = set()
+
+    for index, row in enumerate(records, start=1):
+        name_value = _first_non_empty(row, FIXED_SCHEDULE_NAME_COLUMNS)
+        days_value = _first_non_empty(row, FIXED_SCHEDULE_DAYS_COLUMNS)
+        start_value = _first_non_empty(row, FIXED_SCHEDULE_START_COLUMNS)
+        end_value = _first_non_empty(row, FIXED_SCHEDULE_END_COLUMNS)
+        span_value = _first_non_empty(row, FIXED_SCHEDULE_SPAN_COLUMNS)
+
+        name = str(name_value or "").strip()
+        days = _normalize_weekdays(days_value)
+        start_time = _parse_fixed_schedule_time(start_value)
+        end_time = _parse_fixed_schedule_time(end_value)
+        span_start = pd.NaT
+        span_end = pd.NaT
+        if span_value is not None:
+            # A dated Notion value is only a template for weekday and clock times.
+            # The concrete date/week must not constrain recurring fixed schedules.
+            span_start, span_end = parse_wann(span_value)
+            if pd.notna(span_start):
+                iso_calendar = span_start.date().isocalendar()
+                calendar_weeks.add((iso_calendar.year, iso_calendar.week))
+
+        if span_value is not None and (not days or start_time is None or end_time is None):
+            if pd.notna(span_start):
+                if not days:
+                    days = [span_start.strftime("%A")]
+                if start_time is None:
+                    start_time = span_start.time().replace(second=0, microsecond=0)
+            if pd.notna(span_end) and end_time is None:
+                end_time = span_end.time().replace(second=0, microsecond=0)
+
+        missing = []
+        if not name:
+            missing.append("Name")
+        if not days:
+            missing.append("Days/Wochentage")
+        if start_time is None:
+            missing.append("Start Time")
+        if end_time is None:
+            missing.append("End Time")
+        if missing:
+            errors.append(f"Row {index}: missing or invalid {', '.join(missing)}")
+            continue
+
+        existing = schedules.get(name)
+        if existing:
+            if existing["start_time"] != start_time or existing["end_time"] != end_time:
+                errors.append(f"Row {index}: duplicate schedule for {name} has a different time window")
+                continue
+            existing_days = existing["days"]
+            existing_days.extend(day for day in days if day not in existing_days)
+            continue
+
+        schedules[name] = {
+            "days": days,
+            "start_time": start_time,
+            "end_time": end_time,
+        }
+
+    if len(calendar_weeks) > 1:
+        week_labels = ", ".join(f"{year}-W{week:02d}" for year, week in sorted(calendar_weeks))
+        errors.append(f"Fixed schedule calendar must contain exactly one week. Found: {week_labels}")
+        return {}, errors
+
+    return schedules, errors
+
 def generate_fixed_schedule_entries(start_date, end_date, schedule_dict):
     rows = []
     current = pd.to_datetime(start_date).date()
@@ -112,11 +369,28 @@ def normalize_long_shifts(df, max_hours=10):
     df[['Start Time', 'End Time']] = df.apply(adjust_if_too_long, axis=1)
     return df
 
+
+def fill_missing_non_fixed_shift_times(
+    df: pd.DataFrame,
+    start_time: time = time(11, 0),
+    end_time: time = time(16, 0),
+) -> pd.DataFrame:
+    df = df.copy()
+    has_explicit_time = df.get("_has_explicit_time")
+    if has_explicit_time is None:
+        has_explicit_time = pd.Series(False, index=df.index)
+    fallback_mask = ~has_explicit_time.fillna(False).astype(bool)
+    df.loc[fallback_mask, "Start Time"] = df.loc[fallback_mask, "Start Time"].map(
+        lambda value: datetime.combine(value.date(), start_time) if pd.notna(value) else value
+    )
+    df.loc[fallback_mask, "End Time"] = df.loc[fallback_mask, "End Time"].map(
+        lambda value: datetime.combine(value.date(), end_time) if pd.notna(value) else value
+    )
+    return df
+
 def transform_to_schedule_format(df, person_info):
     info_lookup = {name: (location, task) for name, location, task in person_info}
     df_copy = df.copy()
-    df_copy['Start Time'] = df_copy['Start Time'] - pd.Timedelta(hours=2)
-    df_copy['End Time'] = df_copy['End Time'] - pd.Timedelta(hours=2)
     df_copy['Date'] = (
         df_copy['Start Time'].dt.strftime('%Y-%m-%d %H:%M')
         + ' → '
@@ -137,18 +411,11 @@ def transform_to_schedule_format(df, person_info):
     final_df = df_copy[output_columns]
     return final_df
 
-def _select_best_column(df: pd.DataFrame, candidates: tuple[str, ...]) -> str | None:
-    best_col = None
-    best_count = -1
-    for col in candidates:
-        if col not in df.columns:
-            continue
-        values = df[col].dropna().astype(str).str.strip()
-        non_empty = (values != "").sum()
-        if non_empty > best_count:
-            best_col = col
-            best_count = int(non_empty)
-    return best_col
+def detect_availability_time_columns(df: pd.DataFrame) -> dict[str, str | None]:
+    """Detect the current availability time field."""
+    if "Wann" in df.columns:
+        return {"mode": "span", "span": "Wann"}
+    return {"mode": None, "span": None}
 
 
 def _prepare_availability_dataframe(availability_data):
@@ -158,24 +425,19 @@ def _prepare_availability_dataframe(availability_data):
     if df.empty:
         raise ValueError("availability_data is empty.")
 
-    if "Name" not in df.columns:
-        raise ValueError("availability_data must contain a 'Name' column.")
+    if list(df.columns) != list(AVAILABILITY_COLUMNS):
+        raise ValueError(
+            "availability_data must contain exactly these columns in this order: "
+            f"{', '.join(AVAILABILITY_COLUMNS)}."
+        )
 
-    has_start_end = "Start Time" in df.columns and "End Time" in df.columns
-    if has_start_end:
-        df["Start Time"] = pd.to_datetime(df["Start Time"], dayfirst=True, errors="coerce")
-        df["End Time"] = pd.to_datetime(df["End Time"], dayfirst=True, errors="coerce")
-    else:
-        span_col = _select_best_column(df, SPAN_COLUMN_CANDIDATES)
-        if not span_col:
-            raise ValueError(
-                "availability_data must contain either 'Start Time'/'End Time' "
-                "or a timespan column like 'Wann?'."
-            )
-        df[["Start Time", "End Time"]] = df[span_col].apply(lambda x: pd.Series(parse_wann(x)))
+    parsed_spans = df["Wann"].map(parse_wann)
+    df["_has_explicit_time"] = df["Wann"].map(has_explicit_time_frame)
+    df["Start Time"] = parsed_spans.map(lambda value: value[0])
+    df["End Time"] = parsed_spans.map(lambda value: value[1])
 
     df = df[df["Start Time"].notna()].copy()
-    df = split_multiday_entries(df)
+    df = split_multiday_entries(df).reset_index(drop=True)
     df = fill_missing_end_times(df)
     df = df[df["Name"].notna()].copy()
     df["Name"] = df["Name"].astype(str).str.strip()
@@ -250,7 +512,7 @@ def generate_schichtplan(availability_data, start_date, end_date, person_info, f
     df["new_name"] = df["Name"].apply(lambda n: match_name(n, name_list))
     matched_names = set(df["new_name"].dropna().unique())
     df = df[df["new_name"].notna()]
-    df = normalize_long_shifts(df)
+    df = fill_missing_non_fixed_shift_times(df)
 
     # Add fixed schedules if provided
     if fixed_schedules:

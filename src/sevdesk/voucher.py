@@ -386,6 +386,59 @@ def build_voucher_accounting_type_update_payload_for_positions(
     }
 
 
+def build_voucher_field_update_payload(
+    existing_voucher: dict[str, Any],
+    *,
+    voucher_date: str | None = None,
+    delivery_date: str | None = None,
+    description: str | None = None,
+) -> dict[str, Any]:
+    if not isinstance(existing_voucher, dict):
+        raise RuntimeError("Existing voucher payload must be an object.")
+
+    voucher, positions = _extract_voucher_update_source(existing_voucher)
+    if not positions:
+        raise RuntimeError("Voucher does not contain any positions that can be preserved.")
+
+    voucher_payload = _clean_voucher_for_update(voucher)
+    voucher_id = str(voucher_payload.get("id", "")).strip()
+    if not voucher_id:
+        raise RuntimeError("Existing voucher payload is missing an id.")
+    voucher_payload["id"] = voucher_id
+
+    changed_fields = 0
+    if voucher_date is not None:
+        cleaned_voucher_date = str(voucher_date).strip()
+        if not cleaned_voucher_date:
+            raise RuntimeError("Voucher date must not be empty.")
+        voucher_payload["voucherDate"] = cleaned_voucher_date
+        changed_fields += 1
+
+    if delivery_date is not None:
+        cleaned_delivery_date = str(delivery_date).strip()
+        if not cleaned_delivery_date:
+            raise RuntimeError("Delivery date must not be empty.")
+        voucher_payload["deliveryDate"] = cleaned_delivery_date
+        changed_fields += 1
+
+    if description is not None:
+        voucher_payload["description"] = str(description).strip()
+        changed_fields += 1
+
+    if changed_fields == 0:
+        raise RuntimeError("No voucher fields were provided for update.")
+
+    return {
+        "voucher": voucher_payload,
+        "voucherPosSave": [
+            _clean_existing_voucher_pos_for_update(position)
+            for position in positions
+        ],
+        "voucherPosDelete": None,
+        "filename": None,
+    }
+
+
 def extract_voucher_accounting_type_ids(existing_voucher: dict[str, Any]) -> list[str]:
     if not isinstance(existing_voucher, dict):
         return []

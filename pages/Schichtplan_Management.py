@@ -1,50 +1,34 @@
 import datetime
 import io
-import logging
 import os
 import re
 import shutil
-from urllib.parse import parse_qs, urlparse
+from typing import Any
+from urllib.parse import parse_qs, urlencode, urlparse
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import streamlit as st
 
 from src.app_paths import SCHICHTPLAN_DATA_DIR
+from src.logging_config import logger as app_logger
 from src.notion_access import NotionRequestError, flatten_properties, notion_request
-from src.schichtplan_utils import generate_schichtplan
+from src.schichtplan_utils import AVAILABILITY_COLUMNS, generate_schichtplan, normalize_fixed_schedule_records
 
 # Page title
 st.title("👥 Schichtplan Management")
-logger = logging.getLogger(__name__)
+logger = app_logger.getChild("pages.Schichtplan_Management")
 
 PERSON_INFO_CSV_PATH = SCHICHTPLAN_DATA_DIR / "mitarbeiter_info.csv"
 PERSON_INFO_EXCEL_PATH = SCHICHTPLAN_DATA_DIR / "mitarbeiter_info.xlsx"
 PERSON_INFO_BACKUP_DIR = SCHICHTPLAN_DATA_DIR / "backups"
 PERSON_INFO_COLUMNS = ["Name", "Location", "Task"]
+EXPECTED_AVAILABILITY_COLUMNS = list(AVAILABILITY_COLUMNS)
 
-# Fixed schedules configuration (weekly recurring shifts)
-FIXED_SCHEDULES = {
-    "Jaime": {
-        "days": ["Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"],
-        "start_time": datetime.time(9, 0),
-        "end_time": datetime.time(17, 0),
-    },
-    "Ula": {
-        "days": ["Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"],
-        "start_time": datetime.time(9, 0),
-        "end_time": datetime.time(17, 0),
-    },
-    "Lennard": {
-        "days": ["Monday", "Tuesday", "Wednesday", "Friday"],
-        "start_time": datetime.time(9, 0),
-        "end_time": datetime.time(17, 0),
-    },
-    "Kathi": {
-        "days": [ "Thursday"],
-        "start_time": datetime.time(9, 0),
-        "end_time": datetime.time(17, 0),
-    },
-}
+DEFAULT_FIXED_SCHEDULE_NOTION_URL = (
+    "https://www.notion.so/suedseite/Schichtplan-Fix-Bakery-36e4e28bdf9e801eba5bf47ed75cdbb0"
+)
+BERLIN_TIMEZONE = ZoneInfo("Europe/Berlin")
 
 
 def _normalize_person_info_df(df: pd.DataFrame) -> pd.DataFrame:
@@ -247,9 +231,9 @@ def _format_notion_date_value_for_wann(value: str | None) -> str | None:
         # Keep unknown inputs as-is so downstream parsing still has a chance.
         return raw
 
-    # Keep wall-clock times from Notion and avoid mixing aware/naive datetimes later.
+    # Treat every aware Notion value as an instant, then render it as Berlin wall time.
     if parsed.tzinfo is not None:
-        parsed = parsed.replace(tzinfo=None)
+        parsed = parsed.astimezone(BERLIN_TIMEZONE).replace(tzinfo=None)
 
     if has_time_component:
         return parsed.strftime("%B %d, %Y %H:%M")
@@ -335,6 +319,120 @@ def fetch_person_info_from_notion(database_ref: str):
     )
     return people, raw_rows
 
+
+def _iter_notion_block_children(token: str, block_id: str):
+    payload = {"page_size": 100}
+    while True:
+        query = urlencode(payload)
+        data = notion_request("GET", f"/blocks/{block_id}/children?{query}", token)
+        yield from data.get("results", [])
+        if not data.get("has_more"):
+            break
+        payload["start_cursor"] = data.get("next_cursor")
+
+
+def resolve_fixed_schedule_database_id(database_ref: str, token: str) -> tuple[str, str]:
+    """Return a database ID, accepting either a direct database link or a page with child databases."""
+    notion_id = extract_notion_database_id(database_ref)
+    if not notion_id:
+        raise ValueError("Could not extract Notion ID from the fixed schedule link or ID.")
+
+    try:
+        database = notion_request("GET", f"/databases/{notion_id}", token)
+        title = "".join(item.get("plain_text", "") for item in database.get("title", []))
+        return notion_id, title or notion_id
+    except NotionRequestError as e:
+        if e.status_code != 400 or "is a page, not a database" not in e.body:
+            raise
+
+    child_databases = []
+    for block in _iter_notion_block_children(token, notion_id):
+        child_id = (block.get("id") or "").replace("-", "").lower()
+        if block.get("type") != "child_database" or not child_id:
+            continue
+        title = ((block.get("child_database") or {}).get("title") or "").strip()
+        child_databases.append((child_id, title or child_id))
+
+    if not child_databases:
+        raise ValueError(
+            "The Notion link points to a page, but no child database was found on that page. "
+            "Please paste the database link itself or add an inline database to the page."
+        )
+    if len(child_databases) > 1:
+        logger.info(
+            "Fixed schedule page contains multiple child databases. Using first: %s",
+            child_databases[0][1],
+        )
+    return child_databases[0]
+
+
+def fetch_fixed_schedules_from_notion(database_ref: str) -> tuple[dict[str, dict[str, Any]], list[str], list[dict[str, Any]]]:
+    """Fetch fixed weekly schedules from Notion and normalize them for generation."""
+    logger.info("Fetching fixed schedules from Notion")
+    token = os.getenv("NOTION_TOKEN")
+    if not token:
+        logger.error("NOTION_TOKEN missing while fetching fixed schedules")
+        raise RuntimeError("Missing NOTION_TOKEN in environment or .env")
+
+    database_id, database_title = resolve_fixed_schedule_database_id(database_ref, token)
+
+    payload = {"page_size": 100}
+    raw_rows = []
+    page_count = 0
+    while True:
+        data = notion_request("POST", f"/databases/{database_id}/query", token, payload)
+        page_count += 1
+        for row in data.get("results", []):
+            properties = row.get("properties", {})
+            flat = flatten_properties(properties)
+            for key, prop in properties.items():
+                if isinstance(prop, dict) and prop.get("type") == "date":
+                    flat[key] = prop.get("date")
+            raw_rows.append(flat)
+        if not data.get("has_more"):
+            break
+        payload["start_cursor"] = data.get("next_cursor")
+
+    schedules, errors = normalize_fixed_schedule_records(raw_rows)
+    logger.info(
+        "Fixed schedule Notion fetch complete. database=%s pages=%d raw_rows=%d schedules=%d errors=%d",
+        database_title,
+        page_count,
+        len(raw_rows),
+        len(schedules),
+        len(errors),
+    )
+    return schedules, errors, raw_rows
+
+
+def fixed_schedules_to_dataframe(schedule_dict: dict[str, dict[str, Any]]) -> pd.DataFrame:
+    rows = []
+    for name, schedule in schedule_dict.items():
+        rows.append(
+            {
+                "Name": name,
+                "Days": ", ".join(schedule.get("days", [])),
+                "Start Time": schedule.get("start_time"),
+                "End Time": schedule.get("end_time"),
+            }
+        )
+    return pd.DataFrame(rows, columns=["Name", "Days", "Start Time", "End Time"])
+
+
+def fixed_schedules_signature(schedule_dict: dict[str, dict[str, Any]]) -> str:
+    if not schedule_dict:
+        return "none"
+    parts = []
+    for name in sorted(schedule_dict):
+        schedule = schedule_dict[name]
+        days = ",".join(schedule.get("days", []))
+        start = schedule.get("start_time")
+        end = schedule.get("end_time")
+        start_text = start.strftime("%H:%M") if hasattr(start, "strftime") else str(start)
+        end_text = end.strftime("%H:%M") if hasattr(end, "strftime") else str(end)
+        parts.append(f"{name}:{days}:{start_text}-{end_text}")
+    return "|".join(parts)
+
 def display_name_evaluation(evaluation):
     """Display comprehensive name evaluation results."""
     if not evaluation:
@@ -374,6 +472,11 @@ def display_name_evaluation(evaluation):
         if format_check['valid']:
             st.success(f"✅ **Format Check:** {format_check['message']}")
         else:
+            logger.error(
+                "Schichtplan format check failed: message=%s details=%s",
+                format_check.get("message"),
+                format_check.get("details", ""),
+            )
             st.error(f"❌ **Format Check:** {format_check['message']}")
         
         if 'details' in format_check:
@@ -457,44 +560,65 @@ def quick_format_validation(csv_file_path):
         df = pd.read_csv(csv_file_path)
         return quick_format_validation_from_dataframe(df)
     except Exception as e:
+        logger.exception("Schichtplan format validation failed while reading file=%s", csv_file_path)
         return {'valid': False, 'message': f"Format validation error: {str(e)}"}
 
 
 def quick_format_validation_from_dataframe(df: pd.DataFrame):
     """Quick validation of timespan format compatibility for an in-memory dataframe."""
     try:
-        from src.schichtplan_utils import parse_wann
-        has_start_end = "Start Time" in df.columns and "End Time" in df.columns
+        if list(df.columns) != EXPECTED_AVAILABILITY_COLUMNS:
+            columns = ", ".join(str(col) for col in df.columns)
+            expected = ", ".join(EXPECTED_AVAILABILITY_COLUMNS)
+            logger.error(
+                "Schichtplan availability format validation failed: expected columns=%s actual columns=%s",
+                expected,
+                columns,
+            )
+            return {
+                'valid': False,
+                'message': f"Invalid availability columns. Expected exactly: {expected}",
+                'details': f"Available columns: {columns}",
+            }
+
+        from src.schichtplan_utils import detect_availability_time_columns, parse_wann
+        time_columns = detect_availability_time_columns(df)
         tested_count = 0
         parse_errors = 0
         source_col = ""
 
-        if has_start_end:
-            source_col = "Start Time/End Time"
-            start_samples = df["Start Time"].dropna().head(3)
+        if time_columns.get("mode") == "start_end":
+            start_col = time_columns["start"]
+            end_col = time_columns.get("end")
+            source_col = f"{start_col}/{end_col}" if end_col else str(start_col)
+            start_samples = df[start_col].dropna().head(3)
             tested_count = len(start_samples)
             if tested_count == 0:
                 return {'valid': False, 'message': "No start time data found"}
             parsed_start = pd.to_datetime(start_samples, dayfirst=True, errors="coerce")
             parse_errors = int(parsed_start.isna().sum())
         else:
-            span_candidates = ["Wann?", "Wann", "Date", "Zeitraum", "Zeitspanne"]
-            span_col = None
-            best_count = -1
-            for col in span_candidates:
-                if col not in df.columns:
-                    continue
-                count = int((df[col].dropna().astype(str).str.strip() != "").sum())
-                if count > best_count:
-                    span_col = col
-                    best_count = count
-
-            if not span_col:
-                return {'valid': False, 'message': "Missing timespan data column (e.g. Wann? or Date)"}
+            span_col = time_columns.get("span")
+            if span_col is None:
+                columns = ", ".join(str(col) for col in df.columns)
+                logger.error(
+                    "Schichtplan availability format validation failed: no parseable time column. columns=%s",
+                    columns,
+                )
+                return {
+                    'valid': False,
+                    'message': "Missing parseable time data column (e.g. Wann?, Date, Start/End)",
+                    'details': f"Available columns: {columns}",
+                }
 
             source_col = span_col
-            samples = df[span_col].dropna().astype(str).str.strip()
-            samples = samples[samples != ""].unique()[:3]
+            samples = []
+            for value in df[span_col].dropna().head(25):
+                if isinstance(value, str) and not value.strip():
+                    continue
+                samples.append(value)
+                if len(samples) >= 3:
+                    break
             tested_count = len(samples)
             if tested_count == 0:
                 return {'valid': False, 'message': f"No timespan data found in '{span_col}'"}
@@ -515,6 +639,7 @@ def quick_format_validation_from_dataframe(df: pd.DataFrame):
             'details': f"Tested {tested_count} format(s), {parse_errors} errors"
         }
     except Exception as e:
+        logger.exception("Schichtplan format validation failed for dataframe columns=%s", list(df.columns))
         return {'valid': False, 'message': f"Format validation error: {str(e)}"}
 
 
@@ -660,6 +785,14 @@ if "notion_availability_url" not in st.session_state:
     st.session_state["notion_availability_url"] = ""
 if "last_saved_upload_signature" not in st.session_state:
     st.session_state["last_saved_upload_signature"] = ""
+if "fixed_schedule_notion_url" not in st.session_state:
+    st.session_state["fixed_schedule_notion_url"] = DEFAULT_FIXED_SCHEDULE_NOTION_URL
+if "fixed_schedules" not in st.session_state:
+    st.session_state["fixed_schedules"] = {}
+if "fixed_schedule_raw_rows" not in st.session_state:
+    st.session_state["fixed_schedule_raw_rows"] = []
+if "fixed_schedule_errors" not in st.session_state:
+    st.session_state["fixed_schedule_errors"] = []
 
 
 st.subheader("1) Availability-Datenquelle")
@@ -733,10 +866,30 @@ else:
             logger.exception("Failed reading uploaded availability file: %s", uploaded_file.name)
             st.error(f"❌ Fehler beim Laden der hochgeladenen Verfügbarkeitsdatei: {uploaded_file.name}")
 
+availability_format_error = ""
+if availability_data is not None:
+    actual_columns = list(availability_data.columns)
+    if actual_columns != EXPECTED_AVAILABILITY_COLUMNS:
+        expected = ", ".join(EXPECTED_AVAILABILITY_COLUMNS)
+        actual = ", ".join(str(col) for col in actual_columns)
+        availability_format_error = (
+            f"availability_data muss exakt diese Spalten in dieser Reihenfolge enthalten: {expected}. "
+            f"Gefunden: {actual or '(keine Spalten)'}"
+        )
+        logger.error(
+            "Schichtplan availability format invalid: expected columns=%s actual columns=%s source=%s",
+            expected,
+            actual,
+            availability_data_source,
+        )
+        st.error(f"❌ {availability_format_error}")
+        availability_data = None
+
 has_availability_data = availability_data is not None and not availability_data.empty
 
 if selected_source == "Notion" and not has_availability_data:
-    st.info("Noch keine Notion-Availability geladen. URL eintragen und auf 'Availability aus Notion laden' klicken.")
+    if not availability_format_error:
+        st.info("Noch keine Notion-Availability geladen. URL eintragen und auf 'Availability aus Notion laden' klicken.")
 
 with st.expander("👀 Availability-Datenvorschau", expanded=True):
     if has_availability_data:
@@ -800,7 +953,56 @@ person_info_for_generation = to_person_info_tuples(person_info_data, require_ful
 has_person_info = bool(person_info)
 has_person_info_for_generation = bool(person_info_for_generation)
 
-st.subheader("3) Konsistenzprüfung")
+st.subheader("3) Fix-Schichten")
+st.markdown("Optionale feste Wochenpläne aus Notion.")
+fixed_col1, fixed_col2 = st.columns([2, 1])
+with fixed_col1:
+    st.text_input(
+        "Notion Fix-Schichten Datenbank URL oder ID",
+        key="fixed_schedule_notion_url",
+        placeholder=DEFAULT_FIXED_SCHEDULE_NOTION_URL,
+    )
+with fixed_col2:
+    if st.button("📥 Fix-Schichten laden", width="stretch", key="load_fixed_schedules_from_notion"):
+        logger.info("User triggered Notion fixed schedule load")
+        try:
+            with st.spinner("Lade Fix-Schichten aus Notion ..."):
+                schedules, errors, raw_rows = fetch_fixed_schedules_from_notion(
+                    st.session_state.get("fixed_schedule_notion_url", "")
+                )
+            st.session_state["fixed_schedules"] = schedules
+            st.session_state["fixed_schedule_raw_rows"] = raw_rows
+            st.session_state["fixed_schedule_errors"] = errors
+            if schedules:
+                st.success(f"✅ {len(schedules)} Fix-Schichten aus Notion geladen.")
+            else:
+                st.warning("Keine gültigen Fix-Schichten in der Notion-Datenbank gefunden.")
+        except NotionRequestError as e:
+            logger.exception("Notion API error while loading fixed schedules.")
+            st.error(f"❌ Notion API Fehler ({e.status_code}): {e}")
+        except Exception as e:
+            logger.exception("Unexpected error while loading fixed schedules from Notion.")
+            st.error(f"❌ Fehler beim Laden der Fix-Schichten aus Notion: {e}")
+
+active_fixed_schedules = st.session_state.get("fixed_schedules", {})
+if active_fixed_schedules:
+    st.caption("Aktive Fix-Schichten Quelle: `Notion`")
+    st.dataframe(fixed_schedules_to_dataframe(active_fixed_schedules), width="stretch", hide_index=True)
+else:
+    st.info("Keine Fix-Schichten geladen. Der Export wird nur aus availability_data generiert.")
+
+fixed_schedule_errors = st.session_state.get("fixed_schedule_errors", [])
+if fixed_schedule_errors:
+    with st.expander("⚠️ Nicht importierte Fix-Schicht Zeilen", expanded=False):
+        for error in fixed_schedule_errors:
+            st.warning(error)
+
+fixed_schedule_raw_rows = st.session_state.get("fixed_schedule_raw_rows", [])
+if fixed_schedule_raw_rows:
+    with st.expander("Rohdaten aus Notion", expanded=False):
+        st.dataframe(pd.DataFrame(fixed_schedule_raw_rows), width="stretch", hide_index=True)
+
+st.subheader("4) Konsistenzprüfung")
 if availability_data_source:
     st.caption(f"Aktive availability_data Quelle: `{availability_data_source}`")
 
@@ -877,7 +1079,7 @@ if evaluation_for_selected:
 
 st.divider()
 
-st.subheader("4) Schichtplan Generator")
+st.subheader("5) Schichtplan Generator")
 st.markdown("Dieser Schritt nutzt `availability_data` + `person_info` sowie den gewählten Zeitraum.")
 
 can_generate = bool(
@@ -914,7 +1116,8 @@ with col2:
 
 # Generate unique session key for this generation
 generation_source_key = availability_data_source or selected_source
-generation_key = f"{generation_source_key}::{schichtplan_start_date}::{schichtplan_end_date}"
+fixed_schedule_key = fixed_schedules_signature(active_fixed_schedules)
+generation_key = f"{generation_source_key}::{schichtplan_start_date}::{schichtplan_end_date}::{fixed_schedule_key}"
 
 # Generate schichtplan
 if can_generate and schichtplan_start_date and schichtplan_end_date:
@@ -941,7 +1144,7 @@ if can_generate and schichtplan_start_date and schichtplan_end_date:
                         schichtplan_start_date.strftime("%Y-%m-%d"),
                         schichtplan_end_date.strftime("%Y-%m-%d"),
                         person_info_for_generation,
-                        fixed_schedules=FIXED_SCHEDULES,
+                        fixed_schedules=active_fixed_schedules,
                         output_dir=temp_dir,
                     )
                 

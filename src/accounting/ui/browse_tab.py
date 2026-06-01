@@ -35,6 +35,7 @@ from src.sevdesk.api import (
 from src.sevdesk.booking import (
     book_voucher_to_check_account,
     update_voucher_accounting_type_for_positions,
+    update_voucher_fields,
 )
 
 LATEST_BELEGE_ROWS_KEY = "sevdesk_latest_belege_rows"
@@ -49,6 +50,7 @@ LATEST_BELEGE_UMBUCHEN_CHECK_ACCOUNT_KEY = "sevdesk_latest_belege_umbuchen_check
 LATEST_BELEGE_UMBUCHEN_RESULTS_KEY = "sevdesk_latest_belege_umbuchen_results"
 LATEST_BELEGE_UMBUCHEN_ACCOUNTING_TYPE_KEY = "sevdesk_latest_belege_umbuch_accounting_type"
 LATEST_BELEGE_UMBUCHEN_ACCOUNTING_RESULTS_KEY = "sevdesk_latest_belege_umbuch_accounting_results"
+LATEST_BELEGE_FIELD_UPDATE_RESULTS_KEY = "sevdesk_latest_belege_field_update_results"
 LATEST_BELEGE_POSITION_SELECTION_TABLE_KEY = "sevdesk_latest_belege_position_selection_table"
 LATEST_BELEGE_SELECTED_POSITION_IDS_KEY = "sevdesk_latest_belege_selected_position_ids"
 LATEST_BELEGE_POSITION_SOURCE_IDS_KEY = "sevdesk_latest_belege_position_source_ids"
@@ -308,6 +310,29 @@ def _sevdesk_end_timestamp(value: date | None) -> int | None:
     if value is None:
         return None
     return int(datetime.combine(value, time.max).timestamp())
+
+
+def _parse_voucher_date_for_input(value: object) -> date | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+
+    normalized = text.replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(normalized).date()
+    except ValueError:
+        pass
+
+    for fmt in ("%d.%m.%Y %H:%M:%S", "%d.%m.%Y %H:%M", "%d.%m.%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _sevdesk_date_string(value: date) -> str:
+    return value.strftime("%d.%m.%Y")
 
 
 def _build_voucher_request_filters() -> dict[str, object]:
@@ -624,6 +649,121 @@ def _render_latest_belege_accounting_results() -> None:
     st.dataframe(pd.DataFrame(results), width="stretch", hide_index=True)
 
 
+def _render_latest_belege_field_update_results() -> None:
+    results = st.session_state.get(LATEST_BELEGE_FIELD_UPDATE_RESULTS_KEY)
+    if not isinstance(results, list) or not results:
+        return
+
+    st.markdown("**Belegfeld-Updates**")
+    result = results[-1]
+    if result.get("result") == "success":
+        st.success("Belegfelder wurden aktualisiert.")
+    elif result.get("result") == "skipped":
+        st.info("Keine Änderung notwendig.")
+    else:
+        st.warning("Belegfeld-Update fehlgeschlagen.")
+    st.dataframe(pd.DataFrame(results), width="stretch", hide_index=True)
+
+
+def _render_latest_belege_field_update_section(selected_rows: list[dict]) -> None:
+    st.divider()
+    st.markdown("**Belegfelder ändern**")
+
+    if len(selected_rows) != 1:
+        st.caption("Wähle genau einen Beleg aus, um Belegdatum, Lieferdatum oder Belegname zu ändern.")
+        return
+
+    selected_row = selected_rows[0]
+    voucher_id = str(selected_row.get("id", "")).strip()
+    if not voucher_id:
+        st.caption("Der ausgewählte Beleg hat keine nutzbare ID.")
+        return
+
+    current_voucher_date = _parse_voucher_date_for_input(
+        selected_row.get("voucherDate") or selected_row.get("invoiceDate")
+    )
+    current_delivery_date = _parse_voucher_date_for_input(selected_row.get("deliveryDate"))
+    current_description = str(selected_row.get("description") or selected_row.get("name") or "").strip()
+
+    form_key = f"sevdesk_beleg_field_update_form_{voucher_id}"
+    with st.form(form_key):
+        edited_voucher_date = st.date_input(
+            "Belegdatum",
+            value=current_voucher_date or date.today(),
+            key=f"{form_key}_voucher_date",
+        )
+        edited_delivery_date = st.date_input(
+            "Lieferdatum",
+            value=current_delivery_date or current_voucher_date or date.today(),
+            key=f"{form_key}_delivery_date",
+        )
+        edited_description = st.text_input(
+            "Belegname / Beschreibung",
+            value=current_description,
+            key=f"{form_key}_description",
+        )
+        submitted = st.form_submit_button("Belegfelder speichern", width="stretch", type="primary")
+
+    if not submitted:
+        return
+
+    token = ensure_token()
+    if not token:
+        return
+
+    try:
+        with st.spinner("Belegfelder werden in sevDesk aktualisiert..."):
+            update_result = update_voucher_fields(
+                base_url(),
+                token,
+                voucher_id,
+                voucher_date=_sevdesk_date_string(edited_voucher_date),
+                delivery_date=_sevdesk_date_string(edited_delivery_date),
+                description=edited_description,
+            )
+        updated_voucher = update_result.get("updated_voucher")
+        if isinstance(updated_voucher, dict):
+            _merge_updated_vouchers_into_session([updated_voucher])
+
+        change_status = str(update_result.get("change_status", "success")).strip()
+        st.session_state[LATEST_BELEGE_FIELD_UPDATE_RESULTS_KEY] = [
+            {
+                "result": change_status,
+                "id": voucher_id,
+                "fromBelegdatum": update_result.get("before_voucher_date") or "-",
+                "toBelegdatum": update_result.get("after_voucher_date") or "-",
+                "fromLieferdatum": update_result.get("before_delivery_date") or "-",
+                "toLieferdatum": update_result.get("after_delivery_date") or "-",
+                "fromBeschreibung": update_result.get("before_description") or "-",
+                "toBeschreibung": update_result.get("after_description") or "-",
+                "message": (
+                    "Keine Änderung notwendig."
+                    if change_status == "skipped"
+                    else "Updated successfully."
+                ),
+            }
+        ]
+    except Exception as exc:
+        st.session_state[LATEST_BELEGE_FIELD_UPDATE_RESULTS_KEY] = [
+            {
+                "result": "error",
+                "id": voucher_id,
+                "fromBelegdatum": current_voucher_date.isoformat() if current_voucher_date else "-",
+                "toBelegdatum": _sevdesk_date_string(edited_voucher_date),
+                "fromLieferdatum": current_delivery_date.isoformat() if current_delivery_date else "-",
+                "toLieferdatum": _sevdesk_date_string(edited_delivery_date),
+                "fromBeschreibung": current_description or "-",
+                "toBeschreibung": edited_description or "-",
+                "message": str(exc),
+            }
+        ]
+        report_error(
+            f"Failed to update Belegfelder: {exc}",
+            log_message="Failed to update voucher fields",
+            exc_info=True,
+        )
+
+
 def _unique_download_name(filename: str, seen_filenames: set[str]) -> str:
     candidate = filename.strip() or "beleg.pdf"
     if candidate not in seen_filenames:
@@ -705,7 +845,7 @@ def _render_latest_belege_umbuchen_section(
     total_loaded_rows: int | None,
 ) -> None:
     st.divider()
-    st.markdown("**Umbuchen auf Check Account**")
+    st.markdown("**Ausgewählte Belege**")
 
     current_rows = filtered_rows or []
     visible_row_ids = {
@@ -780,6 +920,11 @@ def _render_latest_belege_umbuchen_section(
             mime=str(download_payload.get("mime_type") or "application/zip"),
             width="stretch",
         )
+
+    _render_latest_belege_field_update_section(selected_rows)
+
+    st.divider()
+    st.markdown("**Umbuchen auf Check Account**")
 
     check_accounts_for_selection = st.session_state.get("sevdesk_check_accounts_rows")
     if check_accounts_for_selection is None:
@@ -1062,6 +1207,7 @@ def _render_latest_belege_umbuchen_section(
 
     _render_latest_belege_umbuchen_results()
     _render_latest_belege_accounting_results()
+    _render_latest_belege_field_update_results()
 
 
 def render_latest_belege_section() -> None:
@@ -1156,6 +1302,7 @@ def render_latest_belege_section() -> None:
                 st.session_state.pop(LATEST_BELEGE_SELECTION_TABLE_KEY, None)
                 st.session_state.pop(LATEST_BELEGE_UMBUCHEN_RESULTS_KEY, None)
                 st.session_state.pop(LATEST_BELEGE_UMBUCHEN_ACCOUNTING_RESULTS_KEY, None)
+                st.session_state.pop(LATEST_BELEGE_FIELD_UPDATE_RESULTS_KEY, None)
                 st.session_state.pop(LATEST_BELEGE_DOWNLOAD_PAYLOAD_KEY, None)
                 st.session_state.pop(LATEST_BELEGE_POSITION_SELECTION_TABLE_KEY, None)
                 st.session_state[LATEST_BELEGE_SELECTED_POSITION_IDS_KEY] = []

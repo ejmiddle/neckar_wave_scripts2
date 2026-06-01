@@ -7,9 +7,14 @@ import streamlit as st
 from src.notion_access import get_notion_orders_from_today
 from src.shopify_access import (
     create_excel_download_button,
-    get_heidelberg_weather,
     get_last_6_days_orders_with_variants,
 )
+
+BREAD_PRODUCT_TITLES = [
+    "Gutes Brot nach Ziegelhausen/Schlierbach",
+    "Unsere Brote",
+    "Brote für Solawi",
+]
 
 
 def move_column_to_end(df: "pd.DataFrame", column: str) -> "pd.DataFrame":
@@ -30,6 +35,34 @@ def apply_fulfillment_filter(
 
     fulfillment_status = df["Fulfillment Status"].fillna("").astype(str).str.lower()
     return df[fulfillment_status != "fulfilled"]
+
+
+def get_available_default_titles(
+    all_product_titles: list[str], default_titles: list[str]
+) -> list[str]:
+    return [title for title in default_titles if title in all_product_titles]
+
+
+def sync_default_title_selection(
+    titles_state_key: str,
+    all_product_titles: list[str],
+    default_titles: list[str],
+) -> None:
+    available_defaults = get_available_default_titles(all_product_titles, default_titles)
+    current_titles = st.session_state.get(titles_state_key)
+
+    if current_titles is None:
+        st.session_state[titles_state_key] = available_defaults
+        return
+
+    valid_current_titles = [
+        title for title in current_titles if title in all_product_titles
+    ]
+    if valid_current_titles != current_titles:
+        st.session_state[titles_state_key] = valid_current_titles
+
+    if not st.session_state[titles_state_key] and available_defaults:
+        st.session_state[titles_state_key] = available_defaults
 
 
 def style_shopify_day_matches(
@@ -139,7 +172,7 @@ def bestellungen_analyse(
     default_titles: list[str] | None = None,
     state_prefix: str = "shopify_brot",
     show_orders_by_customer: bool = True,
-    default_days_back: int = 7,
+    default_days_back: int = 6,
     show_unfulfilled_filter: bool = False,
     show_notion_button: bool = True,
 ) -> None:
@@ -233,16 +266,11 @@ def bestellungen_analyse(
         titles_state_key = f"{state_prefix}_titles"
 
         if default_titles is None:
-            default_titles = [
-                "Gutes Brot nach Ziegelhausen/Schlierbach",
-                "Unsere Brote",
-                "Brote für Solawi",
-            ]
+            default_titles = BREAD_PRODUCT_TITLES
 
-        if titles_state_key not in st.session_state:
-            st.session_state[titles_state_key] = [
-                title for title in default_titles if title in all_product_titles
-            ]
+        sync_default_title_selection(
+            titles_state_key, all_product_titles, default_titles
+        )
 
         if title_filter_mode == "exclude":
             with st.expander("Ausgeschlossene Produkttitel"):

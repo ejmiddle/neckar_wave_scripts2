@@ -1,0 +1,7 @@
+:8080 {
+	basic_auth {
+		{$ACCOUNTING_AUTH_USER:admin} {$ACCOUNTING_AUTH_PASSWORD_HASH}
+	}
+
+	reverse_proxy {$ACCOUNTING_UPSTREAM:http://accounting:8501}
+}

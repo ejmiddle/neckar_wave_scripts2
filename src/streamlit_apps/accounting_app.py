@@ -5,7 +5,6 @@ import streamlit as st
 from src.logging_config import logger
 from src.streamlit_apps.common import REPO_ROOT, load_environment
 
-
 ACCOUNTING_NAV_SECTIONS = [
     (
         "Accounting",
@@ -36,6 +35,16 @@ ACCOUNTING_NAV_SECTIONS = [
                 "icon": "💸",
             },
             {
+                "path": str(REPO_ROOT / "pages/accounting_finom_open_payments.py"),
+                "title": "Finom offene Zahlungen",
+                "icon": "💳",
+            },
+            {
+                "path": str(REPO_ROOT / "pages/accounting_upload_archive.py"),
+                "title": "Upload Archiv",
+                "icon": "📚",
+            },
+            {
                 "path": str(REPO_ROOT / "pages/accounting_amazon.py"),
                 "title": "Receipts & Amazon",
                 "icon": "📦",
@@ -46,9 +55,24 @@ ACCOUNTING_NAV_SECTIONS = [
                 "icon": "📈",
             },
             {
+                "path": str(REPO_ROOT / "pages/accounting_ready2order_sales.py"),
+                "title": "ready2order Produktgruppen",
+                "icon": "📊",
+            },
+            {
+                "path": str(REPO_ROOT / "pages/accounting_to_go_ust_korrektur.py"),
+                "title": "TO GO UST Korrektur",
+                "icon": "🧾",
+            },
+            {
                 "path": str(REPO_ROOT / "pages/accounting_lohn_belege.py"),
                 "title": "Lohn Belege",
                 "icon": "🗂️",
+            },
+            {
+                "path": str(REPO_ROOT / "pages/accounting_zeiterfassung_evaluation.py"),
+                "title": "Evaluation Zeiterfassung",
+                "icon": "⏱️",
             },
             {
                 "path": str(REPO_ROOT / "pages/accounting_md.py"),

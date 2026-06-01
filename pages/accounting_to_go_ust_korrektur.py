@@ -1,0 +1,3 @@
+from src.accounting.page import render_accounting_to_go_ust_korrektur_page
+
+render_accounting_to_go_ust_korrektur_page()

@@ -1,0 +1,64 @@
+{
+  "voucher": {
+    "objectName": "Voucher",
+    "mapAll": true,
+    "voucherType": "VOU",
+    "creditDebit": "C",
+    "status": 50,
+    "voucherDate": "19.03.2026",
+    "deliveryDate": "19.03.2026",
+    "paymentDeadline": "02.04.2026",
+    "currency": "EUR",
+    "description": "RG-EXAMPLE-2026-0001",
+    "supplierName": "Beispiel Lieferant GmbH",
+    "taxRule": {
+      "id": 9,
+      "objectName": "TaxRule"
+    },
+    "taxType": "default",
+    "costCentre": null,
+    "document": null,
+    "checkAccount": {
+      "id": "6184501",
+      "objectName": "CheckAccount"
+    }
+  },
+  "voucherPosSave": [
+    {
+      "objectName": "VoucherPos",
+      "mapAll": true,
+      "net": false,
+      "taxRate": 19.0,
+      "sumGross": 119.0,
+      "sumNet": 100.0,
+      "comment": "Bueromaterial (Verrechnungskonto Gutscheine)",
+      "accountingType": {
+        "id": "1120447",
+        "objectName": "AccountingType"
+      }
+    }
+  ],
+  "voucherPosDelete": null,
+  "filename": null,
+  "notes": {
+    "how_to_choose_account_ids": "Use GET /ReceiptGuidance/forExpense or /ReceiptGuidance/forRevenue and use accountDatevId from the response.",
+    "tax_rules_examples": {
+      "expense_regelbesteuerung_typical": 9,
+      "revenue_regelbesteuerung_typical": 1,
+      "kleinunternehmer_revenue": 11
+    },
+    "ausgewaehltes_buchunggskonto": {
+      "id": "1120447",
+      "name": "Verrechnungskonto Gutscheine"
+    },
+    "ausgewaehltes_zahlungskonto": {
+      "id": "6184501",
+      "name": "APITEST"
+    },
+    "status_values_for_create": [
+      50,
+      100
+    ],
+    "date_format": "dd.mm.yyyy"
+  }
+}
