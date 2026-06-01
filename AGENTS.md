@@ -24,6 +24,15 @@ uv run python -m unittest test_sevdesk_browse.py
 uv run streamlit run pages/Accounting.py
 ```
 
+## Local environment notes
+
+- Repo path in the shared workspace: `/Users/andreasschmidt/CodingProjects/neckarwave_scripts`.
+- The shell is `zsh`; project tasks live in `Taskfile.yaml`.
+- Prefer `task acc_run` for the accounting app; it starts `apps/accounting.py` on port `8081`.
+- For targeted pytest runs, use `PYTHONPATH=.` when importing from `src`, e.g. `PYTHONPATH=. uv run pytest tests/accounting/... -q`.
+- If `uv` hits cache permission issues, use the repo-local cache pattern from tasks: `UV_CACHE_DIR=.uv-cache uv run ...`.
+- Temporary/manual working files usually belong under `workspace/`.
+
 ## Deployment strategy
 
 - Both Streamlit apps use the same pattern: build to GHCR, sync selected secrets from `config/secrets/production.enc.env`, then redeploy the Mittwald service.
